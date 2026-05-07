@@ -1,0 +1,1019 @@
+// ASK Blue Metal — API data model
+// Phase 1: IAM + Audit. Subsequent phases add masters, operations, etc.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// IAM context
+// =============================================================================
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
+
+model User {
+  id                  String     @id @default(cuid())
+  username            String     @unique
+  email               String     @unique
+  firstName           String
+  lastName            String
+  passwordHash        String
+  status              UserStatus @default(ACTIVE)
+  failedLoginAttempts Int        @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  roles         UserRole[]
+  refreshTokens RefreshToken[]
+
+  @@index([status])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users         UserRole[]
+  permissions   RolePermission[]
+  menuAccess    RoleMenu[]
+  featureAccess RoleFeature[]
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  // Canonical permission code, e.g. "masters.customer.create"
+  code        String   @unique
+  resource    String // e.g. "masters.customer"
+  action      String // e.g. "create"
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@index([resource])
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model RefreshToken {
+  id           String    @id @default(cuid())
+  userId       String
+  // SHA-256 of the raw token. Raw token is never persisted.
+  tokenHash    String    @unique
+  // Rotation family: all tokens descended from a single login share this id.
+  family       String
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+  @@index([expiresAt])
+}
+
+// =============================================================================
+// Audit context (cross-cutting; consumed by every other context)
+// =============================================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  // Nullable for system-originated events
+  actorId    String?
+  actorName  String?
+  // CREATE | UPDATE | DELETE | LOGIN | LOGOUT | LOGIN_FAILED | REFRESH_REUSE_DETECTED | ...
+  action     String
+  // Logical resource path, e.g. "iam.user", "operations.token"
+  resource   String
+  resourceId String?
+  // Field-level diff: { field: { from, to } } or arbitrary structured payload
+  changes    Json?
+  ipAddress  String?
+  userAgent  String?
+  requestId  String?
+  createdAt  DateTime @default(now())
+
+  @@index([resource, resourceId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// Masters context (SRS §3.2)
+// =============================================================================
+
+enum BillType {
+  TAX_INVOICE
+  NON_GST
+}
+
+enum SupplierType {
+  TON_BASED
+  REPAIR_MAINTENANCE
+}
+
+enum PrinterType {
+  THERMAL
+  A4
+  A5
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  INCOME
+  EXPENSE
+  EQUITY
+}
+
+model Unit {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  itemsAsPurchaseUnit Item[] @relation("ItemPurchaseUnit")
+  itemsAsSellingUnit  Item[] @relation("ItemSellingUnit")
+}
+
+model WorkCentre {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vehicles        Vehicle[]
+  purchaseEntries PurchaseEntryPass[]
+  purchaseBills   PurchaseBill[]
+  fuelEntries     FuelConsumption[]
+}
+
+model Printer {
+  id          String      @id @default(cuid())
+  code        String      @unique
+  name        String
+  type        PrinterType
+  // Connection target: shared printer name, IP, or device path. Resolved by the
+  // device-gateway adapter at print time.
+  connection  String
+  description String?
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  itemsUsingAsDefault   Item[]
+  commonPrinterSettings CommonPrinterSetting[]
+}
+
+model Bank {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  name          String
+  branch        String?
+  accountNumber String?
+  ifsc          String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Account {
+  id        String      @id @default(cuid())
+  code      String      @unique
+  name      String
+  type      AccountType
+  parentId  String?
+  isActive  Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  parent   Account?  @relation("AccountTree", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children Account[] @relation("AccountTree")
+
+  suppliers Supplier[]
+
+  @@index([parentId])
+}
+
+model BillSundry {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  // True for additions (e.g. round-off add), false for deductions (e.g. driver BATA, round-off deduct).
+  isAddition  Boolean  @default(true)
+  // True if this sundry contributes to taxable amount before GST.
+  affectsGst  Boolean  @default(false)
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Customer {
+  id              String   @id @default(cuid())
+  code            String   @unique
+  name            String
+  address         String?
+  billType        BillType
+  // Required when billType = TAX_INVOICE; enforced in service layer.
+  gstNumber       String?
+  // Manual TCS toggle (SRS §3.2.1: "Tcs Need Manual Selection Only").
+  tcsApplicable   Boolean  @default(false)
+  creditLimit     Decimal  @default(0) @db.Decimal(18, 2)
+  // Free-text terms-of-delivery clause printed on invoices.
+  termsOfDelivery String?
+  contactPerson   String?
+  phone           String?
+  email           String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  vehicles     CustomerVehicle[]
+  rateSettings CustomerItemRate[]
+  freezes      CustomerFreeze[]
+  tokens       Token[]
+  salesBills   SalesBill[]
+
+  @@index([name])
+}
+
+model CustomerVehicle {
+  id            String   @id @default(cuid())
+  customerId    String
+  // Normalized to upper-case in service layer.
+  vehicleNumber String
+  driverName    String?
+  driverPhone   String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, vehicleNumber])
+  @@index([vehicleNumber])
+}
+
+model Supplier {
+  id               String       @id @default(cuid())
+  code             String       @unique
+  name             String
+  address          String?
+  supplierType     SupplierType
+  // FK into Account (bill control account, SRS §3.2.2).
+  controlAccountId String?
+  gstNumber        String?
+  contactPerson    String?
+  phone            String?
+  email            String?
+  isActive         Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  controlAccount  Account?            @relation(fields: [controlAccountId], references: [id], onDelete: SetNull)
+  vehicles        SupplierVehicle[]
+  rateSettings    SupplierItemRate[]
+  purchaseEntries PurchaseEntryPass[]
+  purchaseBills   PurchaseBill[]
+  fuelEntries     FuelConsumption[]
+
+  @@index([name])
+}
+
+model SupplierVehicle {
+  id            String   @id @default(cuid())
+  supplierId    String
+  vehicleNumber String
+  driverName    String?
+  driverPhone   String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, vehicleNumber])
+  @@index([vehicleNumber])
+}
+
+model ItemGroup {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subGroups ItemSubGroup[]
+  items     Item[]
+}
+
+model ItemSubGroup {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  groupId   String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  group ItemGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  items Item[]
+
+  @@index([groupId])
+}
+
+model Item {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  name             String
+  groupId          String
+  subGroupId       String
+  purchaseUnitId   String
+  sellingUnitId    String
+  hsnCode          String?
+  isRawMaterial    Boolean  @default(false)
+  isSaleMaterial   Boolean  @default(true)
+  // Default selling rate; per-customer overrides live in CustomerItemRate.
+  sellingPrice     Decimal  @default(0) @db.Decimal(18, 2)
+  // GST percentage at point of sale (e.g. 5.00 = 5%).
+  gstPercent       Decimal  @default(0) @db.Decimal(5, 2)
+  defaultPrinterId String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  group          ItemGroup    @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  subGroup       ItemSubGroup @relation(fields: [subGroupId], references: [id], onDelete: Restrict)
+  purchaseUnit   Unit         @relation("ItemPurchaseUnit", fields: [purchaseUnitId], references: [id], onDelete: Restrict)
+  sellingUnit    Unit         @relation("ItemSellingUnit", fields: [sellingUnitId], references: [id], onDelete: Restrict)
+  defaultPrinter Printer?     @relation(fields: [defaultPrinterId], references: [id], onDelete: SetNull)
+
+  customerRates      CustomerItemRate[]
+  supplierRates      SupplierItemRate[]
+  freezes            CustomerFreeze[]
+  tokens             Token[]
+  salesBills         SalesBill[]
+  purchaseEntries    PurchaseEntryPass[]
+  purchaseBills      PurchaseBill[]
+  rawMaterialEntries RawMaterialEntry[]
+
+  @@index([groupId])
+  @@index([subGroupId])
+  @@index([name])
+}
+
+model CustomerItemRate {
+  id         String    @id @default(cuid())
+  customerId String
+  itemId     String
+  rate       Decimal   @db.Decimal(18, 2)
+  // Optional validity window. NULL = open ended.
+  validFrom  DateTime?
+  validTo    DateTime?
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  // A given (customer, item) cannot have two simultaneously active rows; the
+  // service layer further checks for date-range overlap.
+  @@unique([customerId, itemId, validFrom])
+  @@index([customerId])
+  @@index([itemId])
+}
+
+model SupplierItemRate {
+  id         String    @id @default(cuid())
+  supplierId String
+  itemId     String
+  rate       Decimal   @db.Decimal(18, 2)
+  validFrom  DateTime?
+  validTo    DateTime?
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, itemId, validFrom])
+  @@index([supplierId])
+  @@index([itemId])
+}
+
+// SRS §3.2.6: block token entry for a (customer, item?) within a date range.
+model CustomerFreeze {
+  id          String   @id @default(cuid())
+  customerId  String
+  // NULL itemId means "all items for this customer".
+  itemId      String?
+  validFrom   DateTime
+  validTo     DateTime
+  reason      String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  item     Item?    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, itemId])
+  @@index([validFrom, validTo])
+}
+
+// SRS §3.2.7: owned vehicles (used for fuel tracking and maintenance).
+model Vehicle {
+  id                 String   @id @default(cuid())
+  registrationNumber String   @unique
+  name               String
+  workCentreId       String?
+  tankCapacityLitres Decimal? @db.Decimal(10, 2)
+  emptyWeightKg      Decimal? @db.Decimal(10, 2)
+  meterOpening       Decimal? @db.Decimal(12, 2)
+  meterMax           Decimal? @db.Decimal(12, 2)
+  hourOpening        Decimal? @db.Decimal(12, 2)
+  hourMax            Decimal? @db.Decimal(12, 2)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workCentre  WorkCentre?       @relation(fields: [workCentreId], references: [id], onDelete: SetNull)
+  fuelEntries FuelConsumption[]
+}
+
+// SRS §3.2.8: drivers / labour register.
+model Driver {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  isDriver    Boolean  @default(true)
+  phone       String?
+  designation String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// =============================================================================
+// Operations context (SRS §3.3)
+// =============================================================================
+
+// Counter table for monotonic running numbers (token, entry, sales bill).
+// One row per scope key, e.g. "token:2026-04-30", "entry:FY2026", "sb:2026".
+model Counter {
+  id        String   @id @default(cuid())
+  scope     String   @unique
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+enum TokenStatus {
+  OPEN
+  BILLED
+  CANCELLED
+}
+
+// SRS §3.3.1 Token Creation (Customer gate entry)
+model Token {
+  id                  String      @id @default(cuid())
+  // Day-based running number (resets daily). Stored zero-padded e.g. "0007".
+  tokenNo             String
+  // Item-based yearly running number, format "<n>/<YY>".
+  entryNo             String
+  tokenDateTime       DateTime    @default(now())
+  // Vehicle text snapshot (free-typed if not in vehicle list).
+  vehicleNo           String
+  emptyWeight         Decimal     @db.Decimal(10, 2)
+  weightCapturedAt    DateTime?
+  customerId          String
+  driverName          String?
+  driverMobile        String?
+  itemId              String
+  anprImageRef        String?
+  anprCapturedAt      DateTime?
+  anprNumberPlateText String?
+  loadImageRef        String?
+  loadCapturedAt      DateTime?
+  barrierEventId      String?
+  status              TokenStatus @default(OPEN)
+  cancelledReason     String?
+  createdById         String
+  updatedById         String?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  customer Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  item     Item       @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  bill     SalesBill?
+
+  @@unique([tokenNo, tokenDateTime])
+  @@index([customerId])
+  @@index([itemId])
+  @@index([status])
+  @@index([tokenDateTime])
+}
+
+enum SalesBillStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+enum PaymentMode {
+  CASH
+  ONLINE
+  CREDIT
+  MIXED
+}
+
+// SRS §3.3.2 Sales Bill (Tax Invoice / Non-GST)
+model SalesBill {
+  id              String          @id @default(cuid())
+  billNo          String          @unique
+  billDate        DateTime        @default(now())
+  // Source token (1:1 — a token becomes a single bill).
+  tokenId         String?         @unique
+  customerId      String
+  vehicleNo       String
+  driverName      String?
+  driverMobile    String?
+  itemId          String
+  // Weighbridge: empty (from token), gross (from sales bill), net = gross - empty
+  emptyWeight     Decimal         @db.Decimal(10, 2)
+  grossWeight     Decimal         @db.Decimal(10, 2)
+  netWeight       Decimal         @db.Decimal(10, 2)
+  // Rate snapshot + tax breakdown
+  rate            Decimal         @db.Decimal(18, 2)
+  taxableAmount   Decimal         @db.Decimal(18, 2)
+  cgstPercent     Decimal         @default(0) @db.Decimal(5, 2)
+  sgstPercent     Decimal         @default(0) @db.Decimal(5, 2)
+  igstPercent     Decimal         @default(0) @db.Decimal(5, 2)
+  cgstAmount      Decimal         @default(0) @db.Decimal(18, 2)
+  sgstAmount      Decimal         @default(0) @db.Decimal(18, 2)
+  igstAmount      Decimal         @default(0) @db.Decimal(18, 2)
+  tcsPercent      Decimal         @default(0) @db.Decimal(5, 2)
+  tcsAmount       Decimal         @default(0) @db.Decimal(18, 2)
+  roundOff        Decimal         @default(0) @db.Decimal(10, 2)
+  totalAmount     Decimal         @db.Decimal(18, 2)
+  // Payment summary
+  paymentMode     PaymentMode     @default(CREDIT)
+  cashAmount      Decimal         @default(0) @db.Decimal(18, 2)
+  onlineAmount    Decimal         @default(0) @db.Decimal(18, 2)
+  creditAmount    Decimal         @default(0) @db.Decimal(18, 2)
+  // Denomination breakdown of the cash collected (JSON: [{denomination, nos, amount}]).
+  // Used by Shift Closing to compute live denomination-wise cash on hand.
+  denominations   Json            @default("[]")
+  remarks         String?
+  status          SalesBillStatus @default(POSTED)
+  cancelledReason String?
+  createdById     String
+  updatedById     String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  token    Token?   @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+
+  @@index([billDate])
+  @@index([customerId])
+  @@index([status])
+}
+
+// ─── Purchase Entry Pass ──────────────────────────────────────────────────────
+
+enum PurchaseEntryStatus {
+  OPEN
+  BILLED
+  CANCELLED
+}
+
+model PurchaseEntryPass {
+  id                   String              @id @default(cuid())
+  passNo               String              @unique
+  passDateTime         DateTime            @default(now())
+  vehicleNoSnapshot    String
+  driverNameSnapshot   String?
+  driverMobile         String?
+  supplierId           String
+  supplierNameSnapshot String
+  workCentreId         String
+  itemId               String
+  itemNameSnapshot     String
+  loadWeight           Decimal             @db.Decimal(10, 3)
+  crRefNo              String?
+  status               PurchaseEntryStatus @default(OPEN)
+  cancelledReason      String?
+  createdById          String
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  supplier   Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  workCentre WorkCentre     @relation(fields: [workCentreId], references: [id], onDelete: Restrict)
+  item       Item           @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  bills      PurchaseBill[]
+
+  @@index([passDateTime])
+  @@index([supplierId])
+  @@index([status])
+}
+
+// ─── Purchase Bill ────────────────────────────────────────────────────────────
+
+enum PurchaseBillStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+model PurchaseBill {
+  id                   String             @id @default(cuid())
+  purchaseNo           String             @unique
+  purchaseDateTime     DateTime           @default(now())
+  entryPassId          String?
+  passNoSnapshot       String?
+  vehicleNoSnapshot    String
+  driverNameSnapshot   String?
+  supplierId           String
+  supplierNameSnapshot String
+  workCentreId         String
+  itemId               String
+  itemNameSnapshot     String
+  loadWeight           Decimal            @db.Decimal(10, 3)
+  emptyWeight          Decimal            @db.Decimal(10, 3)
+  netWeight            Decimal            @db.Decimal(10, 3)
+  rate                 Decimal            @db.Decimal(18, 2)
+  grossAmount          Decimal            @db.Decimal(18, 2)
+  gstPercent           Decimal            @default(0) @db.Decimal(5, 2)
+  gstAmount            Decimal            @default(0) @db.Decimal(18, 2)
+  grossPayable         Decimal            @db.Decimal(18, 2)
+  paymentMode          PaymentMode        @default(CREDIT)
+  status               PurchaseBillStatus @default(DRAFT)
+  cancelledReason      String?
+  createdById          String
+  updatedById          String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  supplier   Supplier           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  workCentre WorkCentre         @relation(fields: [workCentreId], references: [id], onDelete: Restrict)
+  item       Item               @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  entryPass  PurchaseEntryPass? @relation(fields: [entryPassId], references: [id], onDelete: SetNull)
+
+  @@index([purchaseDateTime])
+  @@index([supplierId])
+  @@index([status])
+}
+
+// ─── Shift Management ─────────────────────────────────────────────────────────
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+model Shift {
+  id                    String      @id @default(cuid())
+  shiftNo               String      @unique
+  shiftDate             DateTime
+  openedAt              DateTime    @default(now())
+  openedById            String
+  openedBySnapshot      String
+  openingAmount         Decimal     @default(0) @db.Decimal(18, 2)
+  status                ShiftStatus @default(OPEN)
+  closedAt              DateTime?
+  closedById            String?
+  closedBySnapshot      String?
+  nextShiftUserId       String?
+  remarks               String?
+  // Financials (auto-calculated externally)
+  weightSlipTotal       Decimal     @default(0) @db.Decimal(18, 2)
+  invoiceTotal          Decimal     @default(0) @db.Decimal(18, 2)
+  billingTotal          Decimal     @default(0) @db.Decimal(18, 2)
+  receiptTotal          Decimal     @default(0) @db.Decimal(18, 2)
+  paymentTotal          Decimal     @default(0) @db.Decimal(18, 2)
+  purchaseTotal         Decimal     @default(0) @db.Decimal(18, 2)
+  totalCashReceived     Decimal     @default(0) @db.Decimal(18, 2)
+  netAmount             Decimal     @default(0) @db.Decimal(18, 2)
+  cashInHand            Decimal     @default(0) @db.Decimal(18, 2)
+  transferAmount        Decimal     @default(0) @db.Decimal(18, 2)
+  closingAmount         Decimal     @default(0) @db.Decimal(18, 2)
+  // JSON arrays of {denomination, nos, amount}
+  openingDenominations  Json        @default("[]")
+  closingDenominations  Json        @default("[]")
+  transferDenominations Json        @default("[]")
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  @@index([shiftDate])
+  @@index([status])
+}
+
+// ─── Currency Exchange ────────────────────────────────────────────────────────
+
+enum CurrencyExchangeStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+model CurrencyExchange {
+  id                  String                 @id @default(cuid())
+  entryNo             String                 @unique
+  billDateTime        DateTime               @default(now())
+  // JSON arrays: [{denomination, nos, amount}]
+  outDetails          Json                   @default("[]")
+  inDetails           Json                   @default("[]")
+  totalAmountPaid     Decimal                @default(0) @db.Decimal(18, 2)
+  totalAmountReceived Decimal                @default(0) @db.Decimal(18, 2)
+  status              CurrencyExchangeStatus @default(OPEN)
+  createdById         String
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  @@index([billDateTime])
+}
+
+// ─── Cash Voucher ─────────────────────────────────────────────────────────────
+
+enum VoucherType {
+  PAYMENT
+  RECEIPT
+}
+
+enum VoucherStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+model CashVoucher {
+  id                 String        @id @default(cuid())
+  voucherNo          String        @unique
+  voucherType        VoucherType
+  docDate            DateTime
+  // JSON array: [{slNo, accountId, accountHeadNameSnapshot, description, amount}]
+  lines              Json          @default("[]")
+  totalAmount        Decimal       @default(0) @db.Decimal(18, 2)
+  paymentMode        PaymentMode   @default(CASH)
+  bankId             String?
+  transactionNo      String?
+  denominations      Json          @default("[]")
+  preparedById       String
+  preparedBySnapshot String
+  authorisedById     String?
+  remarks            String?
+  status             VoucherStatus @default(DRAFT)
+  cancelledReason    String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@index([docDate])
+  @@index([voucherType])
+  @@index([status])
+}
+
+// ─── Fuel Consumption ─────────────────────────────────────────────────────────
+
+enum FuelStatus {
+  SAVED
+  POSTED
+  CANCELLED
+}
+
+model FuelConsumption {
+  id                   String     @id @default(cuid())
+  entryNo              String     @unique
+  entryDateTime        DateTime   @default(now())
+  vehicleId            String
+  vehicleRegNoSnapshot String
+  driverId             String?
+  driverNameSnapshot   String?
+  workCentreId         String
+  supplierId           String
+  supplierNameSnapshot String
+  referenceNo          String?
+  meterStartReading    Decimal    @db.Decimal(10, 2)
+  meterCurrentReading  Decimal    @db.Decimal(10, 2)
+  fuelFilledQty        Decimal    @db.Decimal(10, 2)
+  ratePerLiter         Decimal    @db.Decimal(10, 2)
+  fuelAmount           Decimal    @db.Decimal(18, 2)
+  expenses             Json       @default("[]")
+  totalExpenseAmount   Decimal    @default(0) @db.Decimal(18, 2)
+  paidAmount           Decimal    @default(0) @db.Decimal(18, 2)
+  status               FuelStatus @default(SAVED)
+  remarks              String?
+  createdById          String
+
+  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  workCentre WorkCentre @relation(fields: [workCentreId], references: [id], onDelete: Restrict)
+  supplier   Supplier   @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([entryDateTime])
+  @@index([vehicleId])
+}
+
+// ─── Raw Material Entry (Item-wise consumption) ───────────────────────────────
+
+enum RawMaterialStatus {
+  SAVED
+  POSTED
+  CANCELLED
+}
+
+enum RawMaterialSource {
+  ITEM_WISE
+  PURCHASE_WISE
+}
+
+model RawMaterialEntry {
+  id               String            @id @default(cuid())
+  entryNo          String            @unique
+  entryDateTime    DateTime          @default(now())
+  itemId           String
+  itemNameSnapshot String
+  currentStockTonn Decimal           @db.Decimal(12, 3)
+  consumedTonn     Decimal           @db.Decimal(12, 3)
+  closingStockTonn Decimal           @db.Decimal(12, 3)
+  status           RawMaterialStatus @default(SAVED)
+  source           RawMaterialSource @default(ITEM_WISE)
+  remarks          String?
+  createdById      String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  @@index([entryDateTime])
+  @@index([itemId])
+  @@index([source])
+}
+
+// =============================================================================
+// Admin: Menu / Feature / Role-Access mapping (UI authorization matrix)
+// =============================================================================
+
+model Menu {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  parentId  String?
+  parent    Menu?    @relation("MenuTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  Menu[]   @relation("MenuTree")
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roleAccess RoleMenu[]
+
+  @@index([parentId])
+}
+
+model RoleMenu {
+  roleId    String
+  menuId    String
+  canView   Boolean  @default(false)
+  canCreate Boolean  @default(false)
+  canEdit   Boolean  @default(false)
+  canDelete Boolean  @default(false)
+  updatedAt DateTime @default(now()) @updatedAt
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  menu Menu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, menuId])
+  @@index([menuId])
+}
+
+model Feature {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  moduleName String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  roleAccess RoleFeature[]
+
+  @@index([moduleName])
+}
+
+model RoleFeature {
+  roleId    String
+  featureId String
+  isAllowed Boolean  @default(false)
+  updatedAt DateTime @default(now()) @updatedAt
+
+  role    Role    @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  feature Feature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, featureId])
+  @@index([featureId])
+}
+
+// =============================================================================
+// System Settings (key-value store grouped by category)
+// =============================================================================
+
+model SystemSetting {
+  key       String   @id
+  category  String
+  value     Json
+  updatedBy String?
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([category])
+}
+
+// =============================================================================
+// Common Printer Settings (form -> printer mapping)
+// =============================================================================
+
+model CommonPrinterSetting {
+  id               String   @id @default(cuid())
+  formName         String
+  printerId        String?
+  printer          Printer? @relation(fields: [printerId], references: [id], onDelete: SetNull)
+  printEngine      String
+  printFormat      String
+  defaultCopies    Int      @default(1)
+  showPreview      Boolean  @default(true)
+  allowPdfFallback Boolean  @default(false)
+  isDefault        Boolean  @default(false)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([formName])
+  @@index([printerId])
+}
+
+// =============================================================================
+// Device Event Logs (weighbridge / camera / barrier / printer telemetry)
+// =============================================================================
+
+model DeviceLog {
+  id         String   @id @default(cuid())
+  deviceType String
+  deviceName String
+  eventType  String
+  status     String
+  message    String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([deviceType])
+  @@index([status])
+  @@index([createdAt])
+}
