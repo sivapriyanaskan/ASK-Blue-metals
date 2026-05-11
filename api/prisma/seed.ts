@@ -120,6 +120,38 @@ async function main() {
     // eslint-disable-next-line no-console
     console.log(`Admin user "${config.SEED_ADMIN_USERNAME}" already exists; skipping.`);
   }
+
+  // 5. Company profile (singleton row used to print invoice headers).
+  await prisma.companyProfile.upsert({
+    where: { id: 'singleton' },
+    update: {},
+    create: {
+      id: 'singleton',
+      name: 'ASK Blue Metal',
+      address: '',
+      gstin: '',
+      panNumber: '',
+      msmeNumber: '',
+      cin: '',
+      phone: '',
+      email: '',
+      bankName: '',
+      accountNumber: '',
+      ifscCode: '',
+      upiId: '',
+    },
+  });
+
+  await prisma.systemSetting.upsert({
+    where: { key: 'tokens.externalEntryRequired' },
+    update: {},
+    create: {
+      key: 'tokens.externalEntryRequired',
+      category: 'operations.token',
+      value: false,
+      updatedBy: 'seed',
+    },
+  });
 }
 
 main()

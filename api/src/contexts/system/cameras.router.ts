@@ -30,6 +30,13 @@ const cameras: Record<string, { url: string | undefined; label: string }> = {
   top: { url: config.CAMERA_TOP_RTSP_URL, label: 'Top Camera' },
 };
 
+// In-memory cache of the most recent JPEG frame seen on each live stream.
+// The capture endpoint reads from here instead of opening a second RTSP
+// session to the camera (most NVRs/Hikvision cams limit concurrent
+// sessions to 1–3, so racing two ffmpegs causes "Camera unreachable").
+const latestFrame = new Map<string, { jpeg: Buffer; at: number }>();
+const FRAME_MAX_AGE_MS = 5_000;
+
 function resolveCamera(id: string): { url: string; label: string } | null {
   const cam = cameras[id];
   if (!cam || !cam.url) return null;
@@ -38,7 +45,7 @@ function resolveCamera(id: string): { url: string; label: string } | null {
 
 const MJPEG_BOUNDARY = 'ffmpegmjpegboundary';
 
-function streamMjpeg(req: Request, res: Response, rtspUrl: string): void {
+function streamMjpeg(req: Request, res: Response, rtspUrl: string, cameraId: string): void {
   res.writeHead(200, {
     'Content-Type': `multipart/x-mixed-replace; boundary=${MJPEG_BOUNDARY}`,
     'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
@@ -75,6 +82,9 @@ function streamMjpeg(req: Request, res: Response, rtspUrl: string): void {
       if (end < 0) break;
       const frame = buf.slice(start, end + 2);
       buf = buf.slice(end + 2);
+      // Cache a copy so the capture endpoint can serve it without
+      // opening a second RTSP session to the camera.
+      latestFrame.set(cameraId, { jpeg: Buffer.from(frame), at: Date.now() });
       const header =
         `--${MJPEG_BOUNDARY}\r\n` +
         `Content-Type: image/jpeg\r\n` +
@@ -110,18 +120,20 @@ function captureSnapshot(rtspUrl: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const args = [
       '-rtsp_transport', 'tcp',
+      '-stimeout', '5000000',
       '-i', rtspUrl,
       '-frames:v', '1',
       '-q:v', '3',
       '-vf', `scale=${config.CAMERA_STREAM_WIDTH}:-2`,
       '-f', 'image2',
       '-vcodec', 'mjpeg',
+      '-an',
       'pipe:1',
     ];
     const ff = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const chunks: Buffer[] = [];
     let stderr = '';
-    const killTimer = setTimeout(() => ff.kill('SIGKILL'), 10_000);
+    const killTimer = setTimeout(() => ff.kill('SIGKILL'), 15_000);
 
     ff.stdout.on('data', (c: Buffer) => chunks.push(c));
     ff.stderr.on('data', (c: Buffer) => {
@@ -157,8 +169,21 @@ camerasRouter.get('/:id/stream.mjpg', (req, res) => {
     res.status(404).json({ error: 'Camera not configured' });
     return;
   }
-  streamMjpeg(req, res, cam.url);
+  streamMjpeg(req, res, cam.url, req.params.id);
 });
+
+/**
+ * Try the in-memory cache first (populated by an active live stream).
+ * Falls back to spawning a one-shot ffmpeg only when no live stream is
+ * currently running for this camera.
+ */
+async function getLatestJpeg(cameraId: string, rtspUrl: string): Promise<Buffer> {
+  const cached = latestFrame.get(cameraId);
+  if (cached && Date.now() - cached.at < FRAME_MAX_AGE_MS) {
+    return cached.jpeg;
+  }
+  return captureSnapshot(rtspUrl);
+}
 
 camerasRouter.get('/:id/snapshot.jpg', async (req, res) => {
   const cam = resolveCamera(req.params.id);
@@ -167,7 +192,7 @@ camerasRouter.get('/:id/snapshot.jpg', async (req, res) => {
     return;
   }
   try {
-    const jpg = await captureSnapshot(cam.url);
+    const jpg = await getLatestJpeg(req.params.id, cam.url);
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'no-store');
     res.send(jpg);
@@ -189,7 +214,7 @@ camerasRouter.post('/:id/capture', async (req, res) => {
     return;
   }
   try {
-    const jpg = await captureSnapshot(cam.url);
+    const jpg = await getLatestJpeg(req.params.id, cam.url);
     const stored = await persistSnapshot(req.params.id, jpg);
     res.status(201).json(stored);
   } catch (err) {

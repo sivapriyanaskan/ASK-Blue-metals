@@ -143,6 +143,7 @@ model AuditLog {
 enum BillType {
   TAX_INVOICE
   NON_GST
+  WEIGHT_SLIP
 }
 
 enum SupplierType {
@@ -253,24 +254,33 @@ model BillSundry {
 }
 
 model Customer {
-  id              String   @id @default(cuid())
-  code            String   @unique
-  name            String
-  address         String?
-  billType        BillType
+  id               String   @id @default(cuid())
+  code             String   @unique
+  name             String
+  address          String?
+  state            String?
+  placeOfSupply    String?
+  billType         BillType
   // Required when billType = TAX_INVOICE; enforced in service layer.
-  gstNumber       String?
+  gstNumber        String?
   // Manual TCS toggle (SRS §3.2.1: "Tcs Need Manual Selection Only").
-  tcsApplicable   Boolean  @default(false)
-  creditLimit     Decimal  @default(0) @db.Decimal(18, 2)
+  tcsApplicable    Boolean  @default(false)
+  creditLimit      Decimal  @default(0) @db.Decimal(18, 2)
+  remainingBalance Decimal  @default(0) @db.Decimal(18, 2)
   // Free-text terms-of-delivery clause printed on invoices.
-  termsOfDelivery String?
-  contactPerson   String?
-  phone           String?
-  email           String?
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  termsOfDelivery  String?
+  contactPerson    String?
+  phone            String?
+  email            String?
+  // Client feedback additions:
+  eWayBillNo       String?
+  anprNumber       String?
+  paymentTerms     String?
+  // Net payment due in days from invoice date (T&C printed on invoice).
+  paymentDueDays   Int      @default(0)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   vehicles     CustomerVehicle[]
   rateSettings CustomerItemRate[]
@@ -303,6 +313,7 @@ model Supplier {
   code             String       @unique
   name             String
   address          String?
+  state            String?
   supplierType     SupplierType
   // FK into Account (bill control account, SRS §3.2.2).
   controlAccountId String?
@@ -401,6 +412,7 @@ model Item {
   purchaseEntries    PurchaseEntryPass[]
   purchaseBills      PurchaseBill[]
   rawMaterialEntries RawMaterialEntry[]
+  consumptions       PurchaseConsumption[]
 
   @@index([groupId])
   @@index([subGroupId])
@@ -529,7 +541,7 @@ model Token {
   tokenDateTime       DateTime    @default(now())
   // Vehicle text snapshot (free-typed if not in vehicle list).
   vehicleNo           String
-  emptyWeight         Decimal     @db.Decimal(10, 2)
+  emptyWeight         Decimal     @db.Decimal(10, 3)
   weightCapturedAt    DateTime?
   customerId          String
   driverName          String?
@@ -540,9 +552,19 @@ model Token {
   anprNumberPlateText String?
   loadImageRef        String?
   loadCapturedAt      DateTime?
+  // #14 \u2014 optional reference to the operator's external paper/CR/manual
+  // entry log. Made required at the API layer when the system setting
+  // `tokens.externalEntryRequired` is true.
+  externalEntryNo     String?
   barrierEventId      String?
   status              TokenStatus @default(OPEN)
   cancelledReason     String?
+  // Captured at cancellation to verify the vehicle left empty.
+  cancelledWeight     Decimal?    @db.Decimal(10, 3)
+  // Two camera angles at the cancel moment: front (ANPR) + top (load bay).
+  cancelledImageRef   String?
+  cancelledTopImageRef String?
+  cancelledAt         DateTime?
   createdById         String
   updatedById         String?
   createdAt           DateTime    @default(now())
@@ -574,48 +596,61 @@ enum PaymentMode {
 
 // SRS §3.3.2 Sales Bill (Tax Invoice / Non-GST)
 model SalesBill {
-  id              String          @id @default(cuid())
-  billNo          String          @unique
-  billDate        DateTime        @default(now())
+  id                    String          @id @default(cuid())
+  billNo                String          @unique
+  billDate              DateTime        @default(now())
   // Source token (1:1 — a token becomes a single bill).
-  tokenId         String?         @unique
-  customerId      String
-  vehicleNo       String
-  driverName      String?
-  driverMobile    String?
-  itemId          String
+  tokenId               String?         @unique
+  customerId            String
+  vehicleNo             String
+  driverName            String?
+  driverMobile          String?
+  itemId                String
   // Weighbridge: empty (from token), gross (from sales bill), net = gross - empty
-  emptyWeight     Decimal         @db.Decimal(10, 2)
-  grossWeight     Decimal         @db.Decimal(10, 2)
-  netWeight       Decimal         @db.Decimal(10, 2)
+  emptyWeight           Decimal         @db.Decimal(10, 3)
+  grossWeight           Decimal         @db.Decimal(10, 3)
+  netWeight             Decimal         @db.Decimal(10, 3)
   // Rate snapshot + tax breakdown
-  rate            Decimal         @db.Decimal(18, 2)
-  taxableAmount   Decimal         @db.Decimal(18, 2)
-  cgstPercent     Decimal         @default(0) @db.Decimal(5, 2)
-  sgstPercent     Decimal         @default(0) @db.Decimal(5, 2)
-  igstPercent     Decimal         @default(0) @db.Decimal(5, 2)
-  cgstAmount      Decimal         @default(0) @db.Decimal(18, 2)
-  sgstAmount      Decimal         @default(0) @db.Decimal(18, 2)
-  igstAmount      Decimal         @default(0) @db.Decimal(18, 2)
-  tcsPercent      Decimal         @default(0) @db.Decimal(5, 2)
-  tcsAmount       Decimal         @default(0) @db.Decimal(18, 2)
-  roundOff        Decimal         @default(0) @db.Decimal(10, 2)
-  totalAmount     Decimal         @db.Decimal(18, 2)
+  rate                  Decimal         @db.Decimal(18, 2)
+  taxableAmount         Decimal         @db.Decimal(18, 2)
+  cgstPercent           Decimal         @default(0) @db.Decimal(5, 2)
+  sgstPercent           Decimal         @default(0) @db.Decimal(5, 2)
+  igstPercent           Decimal         @default(0) @db.Decimal(5, 2)
+  cgstAmount            Decimal         @default(0) @db.Decimal(18, 2)
+  sgstAmount            Decimal         @default(0) @db.Decimal(18, 2)
+  igstAmount            Decimal         @default(0) @db.Decimal(18, 2)
+  tcsPercent            Decimal         @default(0) @db.Decimal(5, 2)
+  tcsAmount             Decimal         @default(0) @db.Decimal(18, 2)
+  roundOff              Decimal         @default(0) @db.Decimal(10, 2)
+  totalAmount           Decimal         @db.Decimal(18, 2)
   // Payment summary
-  paymentMode     PaymentMode     @default(CREDIT)
-  cashAmount      Decimal         @default(0) @db.Decimal(18, 2)
-  onlineAmount    Decimal         @default(0) @db.Decimal(18, 2)
-  creditAmount    Decimal         @default(0) @db.Decimal(18, 2)
+  paymentMode           PaymentMode     @default(CREDIT)
+  cashAmount            Decimal         @default(0) @db.Decimal(18, 2)
+  onlineAmount          Decimal         @default(0) @db.Decimal(18, 2)
+  creditAmount          Decimal         @default(0) @db.Decimal(18, 2)
   // Denomination breakdown of the cash collected (JSON: [{denomination, nos, amount}]).
   // Used by Shift Closing to compute live denomination-wise cash on hand.
-  denominations   Json            @default("[]")
-  remarks         String?
-  status          SalesBillStatus @default(POSTED)
-  cancelledReason String?
-  createdById     String
-  updatedById     String?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  denominations         Json            @default("[]")
+  remarks               String?
+  // Client feedback additions:
+  // Override of bill type at the bill level (defaults from customer.billType when null).
+  billTypeOverride      BillType?
+  // Optional reason captured when bill value crosses the high-value threshold.
+  confirmationReason    String?
+  // Direct-amount entry: when present the bill skips weight × rate calculation.
+  directAmount          Decimal?        @db.Decimal(18, 2)
+  placeOfSupply         String?
+  billToAddress         String?
+  shipToAddress         String?
+  // Payment deferral tracking for partial payments
+  paymentDeferralOption String?         @default("PAY_NOW")
+  remainingBalance      Decimal         @default(0) @db.Decimal(18, 2)
+  status                SalesBillStatus @default(POSTED)
+  cancelledReason       String?
+  createdById           String
+  updatedById           String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
   item     Item     @relation(fields: [itemId], references: [id], onDelete: Restrict)
@@ -624,6 +659,23 @@ model SalesBill {
   @@index([billDate])
   @@index([customerId])
   @@index([status])
+}
+
+// ─── Weight Slip ──────────────────────────────────────────────────────────────
+// SRS Client feedback: 3rd billing type — just record a vehicle weight at the
+// gate with no item/customer/rate. Printed for the driver as a weighment slip.
+model WeightSlip {
+  id          String   @id @default(cuid())
+  slipNo      String   @unique
+  capturedAt  DateTime @default(now())
+  // Captured weight in kilograms (3 decimal places).
+  weight      Decimal  @db.Decimal(10, 3)
+  vehicleNo   String?
+  remarks     String?
+  createdById String
+  createdAt   DateTime @default(now())
+
+  @@index([capturedAt])
 }
 
 // ─── Purchase Entry Pass ──────────────────────────────────────────────────────
@@ -643,11 +695,16 @@ model PurchaseEntryPass {
   driverMobile         String?
   supplierId           String
   supplierNameSnapshot String
-  workCentreId         String
+  // Client feedback: Work Centre is now optional.
+  workCentreId         String?
   itemId               String
   itemNameSnapshot     String
   loadWeight           Decimal             @db.Decimal(10, 3)
   crRefNo              String?
+  // Camera snapshots captured at the gate (relative URLs to /uploads).
+  anprImageRef         String?
+  anprNumberPlateText  String?
+  loadImageRef         String?
   status               PurchaseEntryStatus @default(OPEN)
   cancelledReason      String?
   createdById          String
@@ -655,7 +712,7 @@ model PurchaseEntryPass {
   updatedAt            DateTime            @updatedAt
 
   supplier   Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  workCentre WorkCentre     @relation(fields: [workCentreId], references: [id], onDelete: Restrict)
+  workCentre WorkCentre?    @relation(fields: [workCentreId], references: [id], onDelete: SetNull)
   item       Item           @relation(fields: [itemId], references: [id], onDelete: Restrict)
   bills      PurchaseBill[]
 
@@ -682,7 +739,7 @@ model PurchaseBill {
   driverNameSnapshot   String?
   supplierId           String
   supplierNameSnapshot String
-  workCentreId         String
+  workCentreId         String?
   itemId               String
   itemNameSnapshot     String
   loadWeight           Decimal            @db.Decimal(10, 3)
@@ -693,7 +750,11 @@ model PurchaseBill {
   gstPercent           Decimal            @default(0) @db.Decimal(5, 2)
   gstAmount            Decimal            @default(0) @db.Decimal(18, 2)
   grossPayable         Decimal            @db.Decimal(18, 2)
+  confirmationReason   String?
   paymentMode          PaymentMode        @default(CREDIT)
+  // Camera snapshots captured at the weighbridge.
+  anprImageRef         String?
+  loadImageRef         String?
   status               PurchaseBillStatus @default(DRAFT)
   cancelledReason      String?
   createdById          String
@@ -702,12 +763,42 @@ model PurchaseBill {
   updatedAt            DateTime           @updatedAt
 
   supplier   Supplier           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  workCentre WorkCentre         @relation(fields: [workCentreId], references: [id], onDelete: Restrict)
+  workCentre WorkCentre?        @relation(fields: [workCentreId], references: [id], onDelete: Restrict)
   item       Item               @relation(fields: [itemId], references: [id], onDelete: Restrict)
   entryPass  PurchaseEntryPass? @relation(fields: [entryPassId], references: [id], onDelete: SetNull)
+  consumption PurchaseConsumption?
 
   @@index([purchaseDateTime])
   @@index([supplierId])
+  @@index([status])
+}
+
+// ─── Purchase Consumption (raw material status per bill) ──────────────────────
+
+enum PurchaseConsumptionStatus {
+  NEW
+  CONSUMED
+  IN_STOCK
+  UNDEFINED
+}
+
+model PurchaseConsumption {
+  id               String                    @id @default(cuid())
+  purchaseBillId   String                    @unique
+  itemId           String
+  quantity         Decimal                   @db.Decimal(10, 3)
+  status           PurchaseConsumptionStatus @default(NEW)
+  createdByShiftId String?
+  updatedByShiftId String?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  purchaseBill   PurchaseBill @relation(fields: [purchaseBillId], references: [id], onDelete: Cascade)
+  item           Item         @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  createdByShift Shift?       @relation("ShiftConsumptionsCreated", fields: [createdByShiftId], references: [id], onDelete: SetNull)
+  updatedByShift Shift?       @relation("ShiftConsumptionsUpdated", fields: [updatedByShiftId], references: [id], onDelete: SetNull)
+
+  @@index([createdByShiftId, status])
   @@index([status])
 }
 
@@ -750,6 +841,10 @@ model Shift {
   transferDenominations Json        @default("[]")
   createdAt             DateTime    @default(now())
   updatedAt             DateTime    @updatedAt
+
+  productionEntries RawMaterialEntry[]
+  consumptionsCreated PurchaseConsumption[] @relation("ShiftConsumptionsCreated")
+  consumptionsUpdated PurchaseConsumption[] @relation("ShiftConsumptionsUpdated")
 
   @@index([shiftDate])
   @@index([status])
@@ -886,16 +981,41 @@ model RawMaterialEntry {
   closingStockTonn Decimal           @db.Decimal(12, 3)
   status           RawMaterialStatus @default(SAVED)
   source           RawMaterialSource @default(ITEM_WISE)
+  // Client feedback: link production entries to a sales shift so closing the
+  // shift can require all production rows to be POSTED first.
+  shiftId          String?
   remarks          String?
   createdById      String
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
-  item Item @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  item  Item   @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  shift Shift? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
 
   @@index([entryDateTime])
   @@index([itemId])
   @@index([source])
+  @@index([shiftId])
+}
+
+// ─── Company Profile (singleton) ──────────────────────────────────────────────
+// Used to render the company header on Tax Invoices, Weight Slips, etc.
+model CompanyProfile {
+  id            String   @id @default("singleton")
+  name          String
+  address       String?
+  gstin         String?
+  panNumber     String?
+  msmeNumber    String?
+  cin           String?
+  phone         String?
+  email         String?
+  logoUrl       String?
+  bankName      String?
+  accountNumber String?
+  ifscCode      String?
+  upiId         String?
+  updatedAt     DateTime @updatedAt
 }
 
 // =============================================================================

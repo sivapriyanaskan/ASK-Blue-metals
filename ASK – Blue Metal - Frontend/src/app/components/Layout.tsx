@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router';
 import { useAppContext } from '../context/AppContext';
-import { roleAccessApi, rolesApi, type RoleMenuItem } from '../services/iamApi';
+import { roleAccessApi, type RoleMenuItem } from '../services/iamApi';
 import {
   LayoutDashboard,
   Truck,
@@ -167,39 +167,26 @@ export const Layout = () => {
     const loadMenuAccess = async () => {
       setLoadingMenuAccess(true);
       try {
-        // If user has no roles, allow all menus (admin fallback)
+        // If user has no roles, allow all menus (admin fallback for unauthenticated/dev)
         if (!user.roleCodes || user.roleCodes.length === 0) {
           setAllowedMenuCodes(new Set()); // Empty set means show all
           setLoadingMenuAccess(false);
           return;
         }
 
-        // Fetch all roles to map role codes to IDs
-        const rolesResponse = await rolesApi.list();
-        const roleMap = new Map(rolesResponse.items.map(r => [r.code, r.id]));
-
-        // For the primary role, fetch menu access
-        const primaryRoleCode = user.roleCodes[0]; // Use first role (primary)
-        const roleId = roleMap.get(primaryRoleCode);
-
-        if (!roleId) {
-          console.warn(`Role ID not found for code: ${primaryRoleCode}`);
-          setAllowedMenuCodes(new Set());
-          setLoadingMenuAccess(false);
-          return;
-        }
-
-        const menuAccess = await roleAccessApi.getMenus(roleId);
-        // Only include menus where canView is true
+        // Fetch the current user's effective (union-of-roles) menu access.
+        const menuAccess = await roleAccessApi.myMenus();
         const allowed = new Set(
           menuAccess.items
-            .filter(m => m.canView)
-            .map(m => m.code)
+            .filter((m: RoleMenuItem) => m.canView)
+            .map((m: RoleMenuItem) => m.code),
         );
         setAllowedMenuCodes(allowed);
       } catch (err) {
         console.error('Failed to load menu access:', err);
-        setAllowedMenuCodes(new Set()); // Show all on error
+        // On error, hide everything (safer than showing all). Admins will see
+        // the dashboard at minimum if their JWT has no roleCodes.
+        setAllowedMenuCodes(new Set(['DASHBOARD']));
       } finally {
         setLoadingMenuAccess(false);
       }
@@ -218,10 +205,10 @@ export const Layout = () => {
   const hasWarningDevice = hardwareDevices.some(d => d.status === 'warning');
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-screen bg-gray-50 print:block print:h-auto">
       {/* Left Sidebar */}
       <aside
-        className={`bg-gray-900 text-white transition-all duration-300 flex flex-col ${
+        className={`bg-gray-900 text-white transition-all duration-300 flex flex-col print:hidden ${
           isSidebarCollapsed ? 'w-16' : 'w-64'
         }`}
       >
@@ -332,9 +319,9 @@ export const Layout = () => {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden print:block print:overflow-visible">
         {/* Top Header */}
-        <header className="h-16 bg-white border-b border-gray-300 flex items-center justify-between px-6">
+        <header className="h-16 bg-white border-b border-gray-300 flex items-center justify-between px-6 print:hidden">
           <div className="flex items-center gap-4">
             {/* Shift Status */}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg border">
@@ -469,7 +456,7 @@ export const Layout = () => {
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 overflow-auto bg-gray-50">
+        <main className="flex-1 overflow-auto bg-gray-50 print:overflow-visible print:bg-white">
           <Outlet />
         </main>
       </div>

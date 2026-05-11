@@ -7,6 +7,8 @@ import { currencyExchangeRouter } from './currencyExchange/router.js';
 import { cashVoucherRouter } from './cashVoucher/router.js';
 import { fuelConsumptionRouter } from './fuelConsumption/router.js';
 import { rawMaterialEntryRouter } from './rawMaterialEntry/router.js';
+import { weightSlipRouter } from './weightSlip/router.js';
+import { purchaseConsumptionRouter } from './purchaseConsumption/router.js';
 
 export function mountOperationsRoutes() {
   return {
@@ -19,5 +21,7 @@ export function mountOperationsRoutes() {
     cashVouchers: cashVoucherRouter,
     fuelConsumptions: fuelConsumptionRouter,
     rawMaterialEntries: rawMaterialEntryRouter,
+    weightSlips: weightSlipRouter,
+    purchaseConsumptions: purchaseConsumptionRouter,
   };
 }

@@ -18,6 +18,7 @@ import { mountMastersRoutes } from './contexts/masters/index.js';
 import { mountOperationsRoutes } from './contexts/operations/index.js';
 import { systemSettingsRouter } from './contexts/system/settings.router.js';
 import { camerasRouter } from './contexts/system/cameras.router.js';
+import { companyProfileRouter } from './contexts/system/companyProfile.router.js';
 import { commonPrinterSettingsRouter } from './contexts/masters/commonPrinterSetting/router.js';
 import { openApiDocument } from './infra/openapi.js';
 
@@ -29,6 +30,23 @@ export function createApp() {
 
   // Cross-cutting middleware
   app.use(requestId);
+
+  // Hard request timeout (30s). Long-lived endpoints opt out by URL prefix
+  // — camera streams and the static `/uploads` server can run for minutes.
+  const TIMEOUT_EXEMPT = /^\/(api\/v1\/cameras\/.+\/stream|uploads\/)/;
+  app.use((req, res, next) => {
+    if (TIMEOUT_EXEMPT.test(req.url)) return next();
+    const t = setTimeout(() => {
+      if (!res.headersSent) {
+        res.status(504).json({ error: 'Request timeout' });
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    }, 30_000);
+    res.on('finish', () => clearTimeout(t));
+    res.on('close', () => clearTimeout(t));
+    next();
+  });
   const httpLogger = pinoHttp({
     logger,
     genReqId: (req) => (req as { id?: string }).id ?? '',
@@ -108,6 +126,7 @@ export function createApp() {
   api.use('/audit-logs', auditRouter);
   api.use('/device-logs', deviceLogsRouter);
   api.use('/system/settings', systemSettingsRouter);
+  api.use('/system/company-profile', companyProfileRouter);
   api.use('/cameras', camerasRouter);
 
   // Masters context (SRS §3.2)
@@ -141,6 +160,8 @@ export function createApp() {
   api.use('/finance/cash-vouchers', operations.cashVouchers);
   api.use('/fuel/consumptions', operations.fuelConsumptions);
   api.use('/production/raw-material-entries', operations.rawMaterialEntries);
+  api.use('/production/purchase-consumptions', operations.purchaseConsumptions);
+  api.use('/operations/weight-slips', operations.weightSlips);
 
   // OpenAPI + Swagger UI
   api.get('/openapi.json', (_req, res) => res.json(openApiDocument));

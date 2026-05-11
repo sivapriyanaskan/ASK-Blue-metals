@@ -333,6 +333,41 @@ router.post('/:id/close', validate('params', IdParam), validate('body', Close), 
   if (!shift) return res.status(404).json({ message: 'Not found' });
   if (shift.status !== 'OPEN') return res.status(422).json({ message: 'Shift is not OPEN' });
 
+  // #34 \u2014 hard block: cannot close the sales/cash shift while production
+  // entries tied to it are still in SAVED state. Production must be closed
+  // (all RawMaterialEntry rows for this shift must be POSTED or CANCELLED)
+  // before the shift itself can be closed.
+  const pendingProduction = await prisma.rawMaterialEntry.count({
+    where: { shiftId: shift.id, status: 'SAVED' },
+  });
+  if (pendingProduction > 0) {
+    return res.status(422).json({
+      message: `Cannot close shift: ${pendingProduction} production entry(ies) are still in SAVED status. Close production first.`,
+      code: 'PRODUCTION_NOT_CLOSED',
+      pendingProduction,
+    });
+  }
+
+  // Block close while any purchase consumption row tied to this shift is
+  // still NEW. Entry-way users (strictly WEIGHBRIDGE_OPERATOR — no billing /
+  // admin role) are exempt: they only create bills, they don't classify them.
+  const userRoles = req.user?.roles ?? [];
+  const isEntryWayOnly =
+    userRoles.length > 0 &&
+    userRoles.every((r) => r === 'WEIGHBRIDGE_OPERATOR');
+  if (!isEntryWayOnly) {
+    const pendingConsumption = await prisma.purchaseConsumption.count({
+      where: { createdByShiftId: shift.id, status: 'NEW' },
+    });
+    if (pendingConsumption > 0) {
+      return res.status(422).json({
+        message: `Cannot close shift: ${pendingConsumption} purchase entry(ies) are still in NEW status. Mark them Consumed, In Stock, or Undefined from Raw Material — Purchase Wise.`,
+        code: 'PURCHASE_CONSUMPTION_NOT_CLASSIFIED',
+        pendingConsumption,
+      });
+    }
+  }
+
   const body = req.body as z.infer<typeof Close>;
   const updated = await prisma.shift.update({
     where: { id: req.params.id },

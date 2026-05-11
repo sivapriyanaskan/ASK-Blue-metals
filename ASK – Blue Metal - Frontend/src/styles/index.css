@@ -1,3 +1,13 @@
 @import './fonts.css';
 @import './tailwind.css';
 @import './theme.css';
+
+@media print {
+  @page {
+    margin: 10mm;
+    size: A4 portrait;
+  }
+  body {
+    background: white !important;
+  }
+}

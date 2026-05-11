@@ -72,9 +72,12 @@ export function SearchableDropdown(props: SearchableDropdownProps) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [displayCount, setDisplayCount] = React.useState(pageSize);
+  const [highlightedIndex, setHighlightedIndex] = React.useState(-1);
   
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+  const optionRefs = React.useRef<Array<HTMLDivElement | null>>([]);
+  const hasInitializedHighlightRef = React.useRef(false);
 
   // Get selected option
   const selectedOption = React.useMemo(() => {
@@ -136,18 +139,45 @@ export function SearchableDropdown(props: SearchableDropdownProps) {
   const handleOpenChange = (newOpen: boolean) => {
     setOpen(newOpen);
     if (!newOpen) {
+      hasInitializedHighlightRef.current = false;
       setSearch("");
       setDisplayCount(pageSize);
+      setHighlightedIndex(-1);
     }
   };
 
   // Reset display count when search changes
   React.useEffect(() => {
     setDisplayCount(pageSize);
+    setHighlightedIndex(0);
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
     }
   }, [search, pageSize]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    if (hasInitializedHighlightRef.current) return;
+
+    const selectedIdx = displayedOptions.findIndex((opt) => opt.value === value && !opt.disabled);
+    if (selectedIdx >= 0) {
+      setHighlightedIndex(selectedIdx);
+      hasInitializedHighlightRef.current = true;
+      return;
+    }
+
+    const firstEnabledIdx = displayedOptions.findIndex((opt) => !opt.disabled);
+    setHighlightedIndex(firstEnabledIdx);
+    hasInitializedHighlightRef.current = true;
+  }, [open, displayedOptions, value]);
+
+  React.useEffect(() => {
+    if (!open || highlightedIndex < 0) return;
+    optionRefs.current[highlightedIndex]?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [open, highlightedIndex]);
 
   // Handle item selection
   const handleSelect = (option: SearchableDropdownOption) => {
@@ -164,32 +194,40 @@ export function SearchableDropdown(props: SearchableDropdownProps) {
 
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!open) return;
-
-    const enabledOptions = displayedOptions.filter(opt => !opt.disabled);
-    const currentIndex = enabledOptions.findIndex(opt => opt.value === value);
+    if (!open) {
+      if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+        e.preventDefault();
+        setOpen(true);
+      }
+      return;
+    }
 
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        if (currentIndex < enabledOptions.length - 1) {
-          handleSelect(enabledOptions[currentIndex + 1]);
-        } else if (currentIndex === -1 && enabledOptions.length > 0) {
-          handleSelect(enabledOptions[0]);
+        for (let i = highlightedIndex + 1; i < displayedOptions.length; i += 1) {
+          if (!displayedOptions[i].disabled) {
+            setHighlightedIndex(i);
+            break;
+          }
         }
         break;
       
       case "ArrowUp":
         e.preventDefault();
-        if (currentIndex > 0) {
-          handleSelect(enabledOptions[currentIndex - 1]);
+        for (let i = highlightedIndex - 1; i >= 0; i -= 1) {
+          if (!displayedOptions[i].disabled) {
+            setHighlightedIndex(i);
+            break;
+          }
         }
         break;
       
       case "Enter":
         e.preventDefault();
-        if (enabledOptions.length > 0 && currentIndex === -1) {
-          handleSelect(enabledOptions[0]);
+        if (highlightedIndex >= 0 && highlightedIndex < displayedOptions.length) {
+          const selected = displayedOptions[highlightedIndex];
+          if (!selected.disabled) handleSelect(selected);
         }
         break;
       
@@ -299,18 +337,24 @@ export function SearchableDropdown(props: SearchableDropdownProps) {
               {/* Options */}
               {filteredOptions.length > 0 && (
                 <div className="py-1">
-                  {displayedOptions.map((option) => {
+                  {displayedOptions.map((option, index) => {
                     const isSelected = option.value === value;
+                    const isHighlighted = highlightedIndex === index;
                     
                     if (renderOption) {
                       return (
                         <div
                           key={option.value}
+                          ref={(node) => {
+                            optionRefs.current[index] = node;
+                          }}
                           onClick={() => handleSelect(option)}
+                          onMouseEnter={() => setHighlightedIndex(index)}
                           className={cn(
                             "relative flex cursor-pointer items-center px-3 py-2 text-sm outline-none transition-colors",
                             "hover:bg-accent hover:text-accent-foreground",
                             isSelected && "bg-accent/50",
+                            isHighlighted && "bg-blue-100 text-blue-950 ring-1 ring-inset ring-blue-200",
                             option.disabled && "opacity-50 cursor-not-allowed"
                           )}
                         >
@@ -322,11 +366,16 @@ export function SearchableDropdown(props: SearchableDropdownProps) {
                     return (
                       <div
                         key={option.value}
+                        ref={(node) => {
+                          optionRefs.current[index] = node;
+                        }}
                         onClick={() => handleSelect(option)}
+                        onMouseEnter={() => setHighlightedIndex(index)}
                         className={cn(
                           "relative flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm outline-none transition-colors",
                           "hover:bg-accent hover:text-accent-foreground",
                           isSelected && "bg-accent/50",
+                          isHighlighted && "bg-blue-100 text-blue-950 ring-1 ring-inset ring-blue-200",
                           option.disabled && "opacity-50 cursor-not-allowed hover:bg-transparent"
                         )}
                       >

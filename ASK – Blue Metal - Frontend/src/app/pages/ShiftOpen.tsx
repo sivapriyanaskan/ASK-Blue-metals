@@ -1,17 +1,18 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useAppContext } from '../context/AppContext';
-import { Power, CheckCircle, AlertCircle, Clock, DollarSign, User } from 'lucide-react';
-import { shiftApi } from '../services/operationsApi';
+import { Power, CheckCircle, AlertCircle, Clock, DollarSign, User, X } from 'lucide-react';
+import { shiftApi, purchaseConsumptionApi, type PurchaseConsumptionRow } from '../services/operationsApi';
 import { describeError } from '../services/mastersApi';
 
 export const ShiftOpen = () => {
   const navigate = useNavigate();
-  const { user, shiftStatus, setShiftStatus, hardwareDevices } = useAppContext();
+  const { user, shiftStatus, refreshShiftStatus, hardwareDevices } = useAppContext();
   
   const [openingBalance, setOpeningBalance] = useState<number>(0);
   const [remarks, setRemarks] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [undefinedRows, setUndefinedRows] = useState<PurchaseConsumptionRow[] | null>(null);
   
   // Denomination entry for opening balance
   const [denominations, setDenominations] = useState({
@@ -54,15 +55,23 @@ export const ShiftOpen = () => {
         remarks: remarks || null,
         openingDenominations,
       });
-      setShiftStatus({
-        ...shiftStatus,
-        isOpen: true,
-        shiftNumber: shiftStatus.shiftNumber + 1,
-        startedBy: user.name,
-        startTime: new Date().toTimeString().slice(0, 8),
-      });
+      await refreshShiftStatus();
+      // After opening, check if any UNDEFINED purchase entries are carried
+      // over from previous shifts. If so, show them to the operator before
+      // routing back to the dashboard.
+      let pending: PurchaseConsumptionRow[] = [];
+      try {
+        const res = await purchaseConsumptionApi.undefinedPending();
+        pending = res.items;
+      } catch {
+        /* non-fatal */
+      }
       alert(`Shift ${created.shiftNo} opened successfully!\nOpening Balance: ₹${openingBalance.toFixed(2)}\nOperator: ${user.name}`);
-      navigate('/');
+      if (pending.length > 0) {
+        setUndefinedRows(pending);
+      } else {
+        navigate('/');
+      }
     } catch (err) {
       alert(describeError(err, 'Failed to open shift'));
     } finally {
@@ -270,6 +279,69 @@ export const ShiftOpen = () => {
           </div>
         </div>
       </div>
+      {undefinedRows && undefinedRows.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-2xl rounded-lg bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
+              <h3 className="flex items-center gap-2 text-lg font-semibold text-gray-900">
+                <AlertCircle className="h-5 w-5 text-amber-500" />
+                Undefined purchase entries from previous shift
+              </h3>
+              <button
+                type="button"
+                onClick={() => { setUndefinedRows(null); navigate('/'); }}
+                className="rounded p-1 text-gray-500 hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              <p className="mb-3 text-sm text-gray-700">
+                The following <strong>{undefinedRows.length}</strong> purchase entr{undefinedRows.length === 1 ? 'y was' : 'ies were'} marked Undefined in a previous shift and still need to be classified.
+              </p>
+              <div className="max-h-72 overflow-y-auto rounded border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50 text-left text-xs uppercase text-gray-500">
+                    <tr>
+                      <th className="px-3 py-2">Purchase No</th>
+                      <th className="px-3 py-2">Supplier</th>
+                      <th className="px-3 py-2">Item</th>
+                      <th className="px-3 py-2 text-right">Qty (T)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {undefinedRows.map((r) => (
+                      <tr key={r.id}>
+                        <td className="px-3 py-2 font-mono text-blue-600">{r.purchaseBill.purchaseNo}</td>
+                        <td className="px-3 py-2">{r.purchaseBill.supplierNameSnapshot}</td>
+                        <td className="px-3 py-2">{r.purchaseBill.itemNameSnapshot}</td>
+                        <td className="px-3 py-2 text-right font-mono">{Number(r.quantity).toFixed(3)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => { setUndefinedRows(null); navigate('/'); }}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                onClick={() => { setUndefinedRows(null); navigate('/production/purchase-wise'); }}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                Go to Raw Material — Purchase Wise
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

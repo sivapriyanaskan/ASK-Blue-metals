@@ -56,6 +56,8 @@ export const Permissions = {
   SALES_BILL_EDIT: 'operations.sales_bill.edit',
   PURCHASE_BILL_VIEW: 'operations.purchase_bill.view',
   PURCHASE_BILL_CREATE: 'operations.purchase_bill.create',
+  WEIGHT_SLIP_VIEW: 'operations.weight_slip.view',
+  WEIGHT_SLIP_CREATE: 'operations.weight_slip.create',
 
   // Shift
   SHIFT_OPEN: 'shift.open',
@@ -119,6 +121,8 @@ export const DEFAULT_ROLES: Array<{
       Permissions.TOKEN_CANCEL,
       Permissions.ENTRY_PASS_VIEW,
       Permissions.ENTRY_PASS_CREATE,
+      Permissions.WEIGHT_SLIP_VIEW,
+      Permissions.WEIGHT_SLIP_CREATE,
       Permissions.CUSTOMER_VIEW,
       Permissions.SUPPLIER_VIEW,
       Permissions.ITEM_VIEW,
@@ -138,6 +142,8 @@ export const DEFAULT_ROLES: Array<{
       Permissions.SALES_BILL_EDIT,
       Permissions.PURCHASE_BILL_VIEW,
       Permissions.PURCHASE_BILL_CREATE,
+      Permissions.WEIGHT_SLIP_VIEW,
+      Permissions.WEIGHT_SLIP_CREATE,
       Permissions.TOKEN_VIEW,
       Permissions.ENTRY_PASS_VIEW,
       Permissions.CUSTOMER_VIEW,

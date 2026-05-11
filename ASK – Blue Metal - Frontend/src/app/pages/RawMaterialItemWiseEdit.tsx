@@ -286,7 +286,6 @@ export const RawMaterialItemWiseEdit = () => {
               disabled
               className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 font-semibold"
             />
-            <p className="text-xs text-gray-500 mt-1">Auto-calculated: Current Stock - Consumed</p>
           </div>
 
           {/* Remarks */}

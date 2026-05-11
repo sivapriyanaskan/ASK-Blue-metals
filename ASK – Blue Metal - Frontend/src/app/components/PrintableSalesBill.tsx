@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { companyProfileApi, type CompanyProfile } from '../services/operationsApi';
 
 interface ItemRow {
   itemNameSnapshot: string;
@@ -30,6 +31,9 @@ interface SalesBillData {
   netAmount: number;
   amountInWords: string;
   billType?: string;
+  // #26 — Bill To / Ship To overrides for Tax Invoice prints
+  billToAddress?: string;
+  shipToAddress?: string;
 }
 
 interface PrintableSalesBillProps {
@@ -42,6 +46,12 @@ interface PrintableSalesBillProps {
 
 export const PrintableSalesBill = ({ billData, onPrintComplete, showPrintDialog = true, previewMode = false, onClose }: PrintableSalesBillProps) => {
   const printRef = useRef<HTMLDivElement>(null);
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null);
+
+  // Pull company header (#10, #27) once per mount.
+  useEffect(() => {
+    companyProfileApi.get().then(setCompanyProfile).catch(() => setCompanyProfile(null));
+  }, []);
 
   useEffect(() => {
     if (showPrintDialog && !previewMode) {
@@ -88,6 +98,20 @@ export const PrintableSalesBill = ({ billData, onPrintComplete, showPrintDialog 
   };
 
   const isInvoiceCustomer = billData.billType === 'Invoice Customer';
+  // #18 — Large bold caption per bill type.
+  const billTypeRaw = (billData.billType || '').toUpperCase();
+  const isWeightSlip =
+    billTypeRaw === 'WEIGHT_SLIP' || billTypeRaw === 'WEIGHT SLIP';
+  const isNonGst =
+    billTypeRaw === 'NON_GST' ||
+    billTypeRaw === 'NON-GST' ||
+    billTypeRaw === 'NON GST' ||
+    billTypeRaw === 'ESTIMATE';
+  const printCaption = isWeightSlip
+    ? 'WEIGHT SLIP'
+    : isNonGst
+    ? 'ESTIMATE'
+    : 'TAX INVOICE';
 
   const containerClass = previewMode 
     ? "fixed inset-0 z-50 overflow-auto bg-gray-900 bg-opacity-90 flex items-start justify-center p-4" 
@@ -307,16 +331,35 @@ export const PrintableSalesBill = ({ billData, onPrintComplete, showPrintDialog 
         )}
 
         <div id="printable-bill" className="print-container" ref={printRef}>
-        {/* Company Header */}
+        {/* Company Header (#10, #27) — backed by /system/company-profile */}
         <div className="print-header">
-          <div className="company-name">Ask M Sand</div>
-          <div className="company-details">No:48, Thollamur Village & Post, Villupuram District,</div>
-          <div className="company-details">Ph: 9952277580 , GST No : 33AAKPK1163A2ZB</div>
-          <div className="company-details">Udayam Certificate No : PY03B0006694</div>
+          <div className="company-name">{companyProfile?.name || 'Ask M Sand'}</div>
+          {companyProfile?.address && (
+            <div className="company-details">{companyProfile.address}</div>
+          )}
+          <div className="company-details">
+            {companyProfile?.phone ? `Ph: ${companyProfile.phone}` : 'Ph: 9952277580'}
+            {companyProfile?.gstin
+              ? ` , GST No : ${companyProfile.gstin}`
+              : ' , GST No : 33AAKPK1163A2ZB'}
+          </div>
+          {companyProfile?.msmeNumber && (
+            <div className="company-details">
+              MSME / Udyam No : {companyProfile.msmeNumber}
+            </div>
+          )}
+          {companyProfile?.cin && (
+            <div className="company-details">CIN : {companyProfile.cin}</div>
+          )}
         </div>
 
-        {/* Invoice Title */}
-        <div className="invoice-title">INVOICE</div>
+        {/* #18 — Large bold print-type caption */}
+        <div
+          className="invoice-title"
+          style={{ fontSize: '22px', letterSpacing: '2px' }}
+        >
+          {printCaption}
+        </div>
 
         {/* Bill Details Grid */}
         {isInvoiceCustomer ? (
@@ -410,6 +453,51 @@ export const PrintableSalesBill = ({ billData, onPrintComplete, showPrintDialog 
                   <td style={{ padding: '4px 8px', borderRight: '1px solid #000', fontWeight: 'bold' }}>Vehicle No</td>
                   <td style={{ padding: '4px 4px', borderRight: '1px solid #000', fontWeight: 'bold', textAlign: 'center' }}>:</td>
                   <td style={{ padding: '4px 8px', borderRight: '1px solid #000' }} colSpan={4}>{billData.vehicleNo}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* #26 — Bill To / Ship To block, when present and applicable */}
+        {!isWeightSlip && (billData.billToAddress || billData.shipToAddress) && (
+          <div style={{ marginBottom: '10px' }}>
+            <table
+              style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: '11px',
+                border: '1px solid #000',
+              }}
+            >
+              <tbody>
+                <tr>
+                  <td
+                    style={{
+                      width: '50%',
+                      padding: '6px 8px',
+                      borderRight: '1px solid #000',
+                      verticalAlign: 'top',
+                    }}
+                  >
+                    <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                      Bill To
+                    </div>
+                    <div style={{ whiteSpace: 'pre-wrap' }}>
+                      {billData.billToAddress || billData.customerAddress || '-'}
+                    </div>
+                  </td>
+                  <td style={{ width: '50%', padding: '6px 8px', verticalAlign: 'top' }}>
+                    <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                      Ship To
+                    </div>
+                    <div style={{ whiteSpace: 'pre-wrap' }}>
+                      {billData.shipToAddress ||
+                        billData.billToAddress ||
+                        billData.customerAddress ||
+                        '-'}
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>

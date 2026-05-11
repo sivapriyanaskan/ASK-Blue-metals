@@ -132,6 +132,8 @@ export const PurchaseEntryPass = () => {
           <WeighbridgeDisplay 
             onWeightCapture={handleWeightCapture} 
             externalCapturedWeight={formData.loadedWeight}
+            simulationMinWeight={(selectedVehicle?.emptyWeight ?? 7000) + 10000}
+            simulationMaxWeight={(selectedVehicle?.emptyWeight ?? 7000) + 15000}
           />
         </div>
         <div className="col-span-1">

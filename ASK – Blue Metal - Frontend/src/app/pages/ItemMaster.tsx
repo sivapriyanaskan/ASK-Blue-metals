@@ -338,22 +338,32 @@ export const ItemMaster = () => {
           <Inp label="Selling Price *" value={form.sellingPrice} onChange={(v) => setForm({ ...form, sellingPrice: v })} type="number" />
           <Inp label="GST %" value={form.gstPercent} onChange={(v) => setForm({ ...form, gstPercent: v })} type="number" />
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Raw Material</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Raw Material (Stock / Production input)
+            </label>
             <SearchableDropdown
               options={[{ label: 'No', value: 'false' }, { label: 'Yes', value: 'true' }]}
               value={form.isRawMaterial ? 'true' : 'false'}
               onValueChange={(v) => setForm({ ...form, isRawMaterial: v === 'true' })}
               placeholder="Select"
             />
+            <p className="text-xs text-gray-500 mt-1">
+              Tick Yes for inventory items consumed in production (stock-tracked).
+            </p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Sale Material</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Sale Material (Product / Sellable)
+            </label>
             <SearchableDropdown
               options={[{ label: 'No', value: 'false' }, { label: 'Yes', value: 'true' }]}
               value={form.isSaleMaterial ? 'true' : 'false'}
               onValueChange={(v) => setForm({ ...form, isSaleMaterial: v === 'true' })}
               placeholder="Select"
             />
+            <p className="text-xs text-gray-500 mt-1">
+              Tick Yes for finished products that appear in Sales Bill / Token.
+            </p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Status *</label>

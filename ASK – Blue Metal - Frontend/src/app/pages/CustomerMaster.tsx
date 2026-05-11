@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, Eye, Edit, Trash2, Save, ArrowLeft, Loader2, X } from 'lucide-react';
+import { Plus, Search, Eye, Edit, Trash2, Save, ArrowLeft, Loader2, X, Wand2 } from 'lucide-react';
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import {
   customersApi,
+  customerGstLookup,
   describeError,
   type CustomerRow,
   type CustomerInput,
@@ -10,16 +11,18 @@ import {
 } from '../services/mastersApi';
 
 type Mode = 'list' | 'create' | 'edit' | 'view';
+type BillTypeVal = 'TAX_INVOICE' | 'NON_GST';
 
 interface FormState {
-  code: string;
   name: string;
   address: string;
-  billType: 'TAX_INVOICE' | 'NON_GST';
+  state: string;
+  billType: BillTypeVal;
   gstNumber: string;
   tcsApplicable: boolean;
   creditLimit: string;
   termsOfDelivery: string;
+  paymentDueDays: string;
   contactPerson: string;
   phone: string;
   email: string;
@@ -28,14 +31,15 @@ interface FormState {
 }
 
 const empty: FormState = {
-  code: '',
   name: '',
   address: '',
+  state: '',
   billType: 'TAX_INVOICE',
   gstNumber: '',
   tcsApplicable: false,
   creditLimit: '0',
   termsOfDelivery: '',
+  paymentDueDays: '0',
   contactPerson: '',
   phone: '',
   email: '',
@@ -87,14 +91,15 @@ export const CustomerMaster = () => {
     try {
       const c = await customersApi.get(id);
       setForm({
-        code: c.code,
         name: c.name,
         address: c.address ?? '',
-        billType: c.billType,
+        state: c.state ?? '',
+        billType: c.billType === 'TAX_INVOICE' ? 'TAX_INVOICE' : 'NON_GST',
         gstNumber: c.gstNumber ?? '',
         tcsApplicable: c.tcsApplicable,
         creditLimit: c.creditLimit ?? '0',
         termsOfDelivery: c.termsOfDelivery ?? '',
+        paymentDueDays: c.paymentDueDays != null ? String(c.paymentDueDays) : '0',
         contactPerson: c.contactPerson ?? '',
         phone: c.phone ?? '',
         email: c.email ?? '',
@@ -129,26 +134,36 @@ export const CustomerMaster = () => {
   };
 
   const handleSave = async () => {
-    if (!form.code.trim() || !form.name.trim()) {
-      setError('Code and name are required.');
+    if (!form.name.trim()) {
+      setError('Name is required.');
       return;
     }
     if (form.billType === 'TAX_INVOICE' && !form.gstNumber.trim()) {
       setError('GST Number is required when Bill Type is TAX_INVOICE.');
       return;
     }
+    // Vehicle Number is mandatory (#3). At least one valid row required.
+    if (form.vehicles.length === 0) {
+      setError('At least one vehicle is required for the customer.');
+      return;
+    }
+    if (form.vehicles.some((v) => !v.vehicleNumber.trim())) {
+      setError('Vehicle Number is mandatory for every vehicle row.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       const payload: CustomerInput = {
-        code: form.code.trim().toUpperCase(),
         name: form.name.trim(),
         address: form.address.trim() || undefined,
+        state: form.state.trim() || undefined,
         billType: form.billType,
-        gstNumber: form.gstNumber.trim() || undefined,
+        gstNumber: form.billType === 'TAX_INVOICE' ? (form.gstNumber.trim() || undefined) : undefined,
         tcsApplicable: form.tcsApplicable,
         creditLimit: Number(form.creditLimit) || 0,
         termsOfDelivery: form.termsOfDelivery.trim() || undefined,
+        paymentDueDays: Number(form.paymentDueDays) || 0,
         contactPerson: form.contactPerson.trim() || undefined,
         phone: form.phone.trim() || undefined,
         email: form.email.trim() || undefined,
@@ -184,6 +199,32 @@ export const CustomerMaster = () => {
   const setVehicle = (i: number, patch: Partial<CustomerVehicleInput>) =>
     setForm({ ...form, vehicles: form.vehicles.map((v, idx) => (idx === i ? { ...v, ...patch } : v)) });
 
+  // GST autofill (#7). Calls our `/masters/customers/gst-lookup/:gstin` stub.
+  const [gstLoading, setGstLoading] = useState(false);
+  const fetchFromGst = async () => {
+    const gstin = form.gstNumber.trim().toUpperCase();
+    if (!gstin) {
+      setError('Enter a GSTIN before fetching.');
+      return;
+    }
+    setError(null);
+    setGstLoading(true);
+    try {
+      const r = await customerGstLookup(gstin);
+      setForm((f) => ({
+        ...f,
+        name: r.legalName || r.tradeName || f.name,
+        address: r.address || [r.area, r.city, r.state].filter(Boolean).join(', ') || f.address,
+        state: r.state || f.state,
+        gstNumber: gstin,
+      }));
+    } catch (err) {
+      setError(describeError(err, 'GST lookup failed'));
+    } finally {
+      setGstLoading(false);
+    }
+  };
+
   if (mode === 'list') {
     return (
       <div className="p-6">
@@ -211,7 +252,9 @@ export const CustomerMaster = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Code</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bill Type</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">State</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">GSTIN</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Remaining Balance</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Phone</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
@@ -222,8 +265,10 @@ export const CustomerMaster = () => {
                 <tr key={c.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 font-medium text-gray-900">{c.code}</td>
                   <td className="px-6 py-4 text-gray-900">{c.name}</td>
-                  <td className="px-6 py-4 text-gray-600">{c.billType === 'TAX_INVOICE' ? 'Tax Invoice' : 'Non GST'}</td>
+                  <td className="px-6 py-4 text-gray-600">{c.billType === 'TAX_INVOICE' ? 'Tax Invoice' : 'Invoice'}</td>
+                  <td className="px-6 py-4 text-gray-600">{c.state ?? '-'}</td>
                   <td className="px-6 py-4 text-gray-600 font-mono text-xs">{c.gstNumber ?? '-'}</td>
+                  <td className="px-6 py-4 text-gray-700 font-mono">₹{Number(c.remainingBalance ?? 0).toFixed(2)}</td>
                   <td className="px-6 py-4 text-gray-600">{c.phone ?? '-'}</td>
                   <td className="px-6 py-4">
                     <span className={`px-2 py-1 text-xs font-medium rounded ${c.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
@@ -259,16 +304,19 @@ export const CustomerMaster = () => {
           <div className="grid grid-cols-2 gap-4">
             <Disp label="Code" value={viewing.code} />
             <Disp label="Name" value={viewing.name} />
-            <Disp label="Bill Type" value={viewing.billType} />
+            <Disp label="Bill Type" value={viewing.billType === 'TAX_INVOICE' ? 'Tax Invoice' : 'Invoice'} />
+            <Disp label="State" value={viewing.state ?? '-'} />
             <Disp label="GSTIN" value={viewing.gstNumber ?? '-'} />
             <Disp label="TCS Applicable" value={viewing.tcsApplicable ? 'Yes' : 'No'} />
             <Disp label="Credit Limit" value={viewing.creditLimit} />
+            <Disp label="Remaining Balance" value={`₹${Number(viewing.remainingBalance ?? 0).toFixed(2)}`} />
             <Disp label="Contact Person" value={viewing.contactPerson ?? '-'} />
             <Disp label="Phone" value={viewing.phone ?? '-'} />
             <Disp label="Email" value={viewing.email ?? '-'} />
             <Disp label="Status" value={viewing.isActive ? 'Active' : 'Inactive'} />
             <div className="col-span-2"><Disp label="Address" value={viewing.address ?? '-'} /></div>
             <div className="col-span-2"><Disp label="Terms of Delivery" value={viewing.termsOfDelivery ?? '-'} /></div>
+            <div><Disp label="Payment Due Days" value={String(viewing.paymentDueDays ?? 0)} /></div>
           </div>
           {viewing.vehicles && viewing.vehicles.length > 0 && (
             <div className="mt-6">
@@ -307,19 +355,49 @@ export const CustomerMaster = () => {
       <div className="max-w-4xl mx-auto bg-white rounded-lg border border-gray-300 p-6">
         <h3 className="font-semibold mb-4 pb-2 border-b border-gray-300">Identity</h3>
         <div className="grid grid-cols-2 gap-4 mb-6">
-          <Inp label="Code *" value={form.code} onChange={(v) => setForm({ ...form, code: v.toUpperCase() })} />
           <Inp label="Name *" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
           <div className="col-span-2"><Txt label="Address" value={form.address} onChange={(v) => setForm({ ...form, address: v })} /></div>
+          <Inp label="State" value={form.state} onChange={(v) => setForm({ ...form, state: v })} />
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Bill Type *</label>
             <SearchableDropdown
-              options={[{ label: 'Tax Invoice', value: 'TAX_INVOICE' }, { label: 'Non GST', value: 'NON_GST' }]}
+              options={[
+                { label: 'Tax Invoice', value: 'TAX_INVOICE' },
+                { label: 'Invoice', value: 'NON_GST' },
+              ]}
               value={form.billType}
-              onValueChange={(v) => setForm({ ...form, billType: v as 'TAX_INVOICE' | 'NON_GST' })}
+              onValueChange={(v) => {
+                const next = v as BillTypeVal;
+                setForm((f) => ({ ...f, billType: next, gstNumber: next === 'TAX_INVOICE' ? f.gstNumber : '' }));
+              }}
               placeholder="Select"
             />
           </div>
-          <Inp label={`GSTIN${form.billType === 'TAX_INVOICE' ? ' *' : ''}`} value={form.gstNumber} onChange={(v) => setForm({ ...form, gstNumber: v.toUpperCase() })} mono />
+          {form.billType === 'TAX_INVOICE' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              GSTIN{form.billType === 'TAX_INVOICE' ? ' *' : ''}
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={form.gstNumber}
+                onChange={(e) => setForm({ ...form, gstNumber: e.target.value.toUpperCase() })}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
+              />
+              <button
+                type="button"
+                onClick={fetchFromGst}
+                disabled={gstLoading || !form.gstNumber.trim()}
+                className="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 flex items-center gap-1 text-sm"
+                title="Fetch customer details from GST portal"
+              >
+                {gstLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                Fetch
+              </button>
+            </div>
+          </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">TCS Applicable</label>
             <SearchableDropdown
@@ -347,16 +425,17 @@ export const CustomerMaster = () => {
             />
           </div>
           <div className="col-span-2"><Txt label="Terms of Delivery" value={form.termsOfDelivery} onChange={(v) => setForm({ ...form, termsOfDelivery: v })} /></div>
+          <div><Txt label="Payment Due Days" value={form.paymentDueDays} onChange={(v) => setForm({ ...form, paymentDueDays: v.replace(/[^0-9]/g, '') })} /></div>
         </div>
 
         <h3 className="font-semibold mb-4 pb-2 border-b border-gray-300 flex items-center justify-between">
-          Vehicles
+          <span>Vehicles <span className="text-red-600">*</span></span>
           <button onClick={addVehicle} className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"><Plus className="w-3 h-3" /> Add</button>
         </h3>
         <div className="space-y-2 mb-6">
           {form.vehicles.map((v, i) => (
             <div key={i} className="grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-4"><Inp label="Vehicle No." value={v.vehicleNumber} onChange={(s) => setVehicle(i, { vehicleNumber: s.toUpperCase() })} mono /></div>
+              <div className="col-span-4"><Inp label="Vehicle No. *" value={v.vehicleNumber} onChange={(s) => setVehicle(i, { vehicleNumber: s.toUpperCase() })} mono /></div>
               <div className="col-span-4"><Inp label="Driver Name" value={v.driverName ?? ''} onChange={(s) => setVehicle(i, { driverName: s })} /></div>
               <div className="col-span-3"><Inp label="Driver Phone" value={v.driverPhone ?? ''} onChange={(s) => setVehicle(i, { driverPhone: s })} /></div>
               <div className="col-span-1">
@@ -364,7 +443,7 @@ export const CustomerMaster = () => {
               </div>
             </div>
           ))}
-          {form.vehicles.length === 0 && <p className="text-sm text-gray-500">No vehicles added.</p>}
+          {form.vehicles.length === 0 && <p className="text-sm text-red-600">At least one vehicle is required.</p>}
         </div>
 
         <div className="flex gap-4">

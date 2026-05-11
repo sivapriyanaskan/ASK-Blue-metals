@@ -39,6 +39,7 @@ import { TokenDetails } from './pages/TokenDetails';
 import { SalesBillList } from './pages/SalesBillList';
 import { SalesBill } from './pages/SalesBill';
 import { SalesBillDetails } from './pages/SalesBillDetails';
+import { WeightSlipCreate } from './pages/WeightSlipCreate';
 
 // Operations — Purchase Entry Pass
 import { PurchaseEntryPassList } from './pages/PurchaseEntryPassList';
@@ -144,6 +145,7 @@ export const router = createBrowserRouter([
           { path: 'operations/token-cancel', Component: TokenList },
           { path: 'operations/token-list', Component: TokenList },
           { path: 'operations/token-creation', Component: TokenCreation },
+          { path: 'operations/weight-slip/create', Component: WeightSlipCreate },
 
           // ── Operations: Purchase Entry Pass ────────────────────────────────
           { path: 'operations/purchase-entry-pass', Component: PurchaseEntryPassList },

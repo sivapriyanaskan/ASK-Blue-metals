@@ -9,10 +9,10 @@ import type { PageResult } from './mastersApi.js';
  * netWeight, GST split). The UI sends raw inputs only.
  */
 
-function qs(q: Record<string, unknown> | undefined): string {
+function qs(q: object | undefined): string {
   if (!q) return '';
   const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(q)) {
+  for (const [k, v] of Object.entries(q as Record<string, unknown>)) {
     if (v === undefined || v === null || v === '') continue;
     if (v instanceof Date) params.set(k, v.toISOString());
     else params.set(k, String(v));
@@ -31,10 +31,12 @@ export interface TokenCustomerRef {
   id: string;
   code: string;
   name: string;
-  billType: 'TAX_INVOICE' | 'NON_GST';
+  billType: 'TAX_INVOICE' | 'NON_GST' | 'WEIGHT_SLIP';
   gstNumber: string | null;
   tcsApplicable: boolean;
   creditLimit: string;
+  remainingBalance: string | null;
+  placeOfSupply: string | null;
 }
 
 export interface TokenItemRef {
@@ -68,8 +70,13 @@ export interface TokenRow {
   anprImageRef: string | null;
   anprNumberPlateText: string | null;
   loadImageRef: string | null;
+  externalEntryNo: string | null;
   status: TokenStatus;
   cancelledReason: string | null;
+  cancelledWeight: string | null;
+  cancelledImageRef: string | null;
+  cancelledTopImageRef: string | null;
+  cancelledAt: string | null;
   createdById: string;
   updatedById: string | null;
   createdAt: string;
@@ -89,6 +96,7 @@ export interface TokenInput {
   anprImageRef?: string | null;
   anprNumberPlateText?: string | null;
   loadImageRef?: string | null;
+  externalEntryNo?: string | null;
   weightCapturedAt?: string | null;
 }
 
@@ -103,6 +111,17 @@ export interface TokenListQuery {
   dateTo?: string;
 }
 
+export interface TokenUpdateInput {
+  vehicleNo?: string;
+  driverName?: string | null;
+  driverMobile?: string | null;
+  itemId?: string;
+  emptyWeight?: number;
+  anprImageRef?: string | null;
+  anprNumberPlateText?: string | null;
+  loadImageRef?: string | null;
+}
+
 export const tokenApi = {
   list: async (q?: TokenListQuery): Promise<PageResult<TokenRow>> =>
     (await api.get(`/operations/tokens${qs(q)}`)).data,
@@ -110,8 +129,56 @@ export const tokenApi = {
     (await api.get(`/operations/tokens/${id}`)).data,
   create: async (input: TokenInput): Promise<TokenRow> =>
     (await api.post('/operations/tokens', input)).data,
-  cancel: async (id: string, cancelledReason: string): Promise<TokenRow> =>
-    (await api.post(`/operations/tokens/${id}/cancel`, { cancelledReason })).data,
+  update: async (id: string, input: TokenUpdateInput): Promise<TokenRow> =>
+    (await api.patch(`/operations/tokens/${id}`, input)).data,
+  cancel: async (
+    id: string,
+    payload:
+      | string
+      | { cancelledReason: string; cancelledWeight?: number; cancelledImageRef?: string | null; cancelledTopImageRef?: string | null },
+  ): Promise<TokenRow> => {
+    const body = typeof payload === 'string' ? { cancelledReason: payload } : payload;
+    return (await api.post(`/operations/tokens/${id}/cancel`, body)).data;
+  },
+};
+
+/* ------------------------------------------------------------------ */
+/* Weight slips (3rd billing type — gate-only weight reading)         */
+/* ------------------------------------------------------------------ */
+
+export interface WeightSlipRow {
+  id: string;
+  slipNo: string;
+  capturedAt: string;
+  weight: string;
+  vehicleNo: string | null;
+  remarks: string | null;
+  createdById: string;
+  createdAt: string;
+}
+
+export interface WeightSlipInput {
+  weight: number;
+  vehicleNo?: string | null;
+  remarks?: string | null;
+  capturedAt?: string;
+}
+
+export interface WeightSlipListQuery {
+  search?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export const weightSlipApi = {
+  list: async (q?: WeightSlipListQuery): Promise<PageResult<WeightSlipRow>> =>
+    (await api.get(`/operations/weight-slips${qs(q)}`)).data,
+  get: async (id: string): Promise<WeightSlipRow> =>
+    (await api.get(`/operations/weight-slips/${id}`)).data,
+  create: async (input: WeightSlipInput): Promise<WeightSlipRow> =>
+    (await api.post('/operations/weight-slips', input)).data,
 };
 
 /* ------------------------------------------------------------------ */
@@ -125,8 +192,10 @@ export interface SalesBillCustomerRef {
   id: string;
   code: string;
   name: string;
-  billType: 'TAX_INVOICE' | 'NON_GST';
+  billType: 'TAX_INVOICE' | 'NON_GST' | 'WEIGHT_SLIP';
   gstNumber: string | null;
+  address: string | null;
+  paymentDueDays?: number | null;
 }
 
 export interface SalesBillItemRef {
@@ -141,6 +210,9 @@ export interface SalesBillTokenRef {
   tokenNo: string;
   entryNo: string;
   tokenDateTime: string;
+  anprImageRef: string | null;
+  anprNumberPlateText: string | null;
+  loadImageRef: string | null;
 }
 
 export interface SalesBillRow {
@@ -173,6 +245,12 @@ export interface SalesBillRow {
   onlineAmount: string;
   creditAmount: string;
   remarks: string | null;
+  billTypeOverride: 'TAX_INVOICE' | 'NON_GST' | 'WEIGHT_SLIP' | null;
+  confirmationReason: string | null;
+  directAmount: string | null;
+  placeOfSupply: string | null;
+  billToAddress: string | null;
+  shipToAddress: string | null;
   status: SalesBillStatus;
   cancelledReason: string | null;
   createdById: string;
@@ -185,7 +263,13 @@ export interface SalesBillRow {
 }
 
 export interface SalesBillFromTokenInput {
-  grossWeight: number;
+  grossWeight?: number;
+  directAmount?: number;
+  billTypeOverride?: 'TAX_INVOICE' | 'NON_GST' | 'WEIGHT_SLIP';
+  confirmationReason?: string;
+  placeOfSupply?: string;
+  billToAddress?: string;
+  shipToAddress?: string;
   rateOverride?: number;
   cgstPercent?: number;
   sgstPercent?: number;
@@ -197,6 +281,8 @@ export interface SalesBillFromTokenInput {
   creditAmount?: number;
   denominations?: Array<{ denomination: number; nos: number; amount: number }>;
   remarks?: string | null;
+  paymentDeferralOption?: 'PAY_NOW' | 'PAY_NEXT_BILL';
+  remainingBalance?: number;
 }
 
 export interface SalesBillListQuery {
@@ -209,6 +295,58 @@ export interface SalesBillListQuery {
   dateFrom?: string;
   dateTo?: string;
 }
+
+export interface CompanyProfile {
+  id: string;
+  name: string;
+  address: string | null;
+  gstin: string | null;
+  panNumber: string | null;
+  msmeNumber: string | null;
+  cin: string | null;
+  phone: string | null;
+  email: string | null;
+  logoUrl: string | null;
+  bankName: string | null;
+  accountNumber: string | null;
+  ifscCode: string | null;
+  upiId: string | null;
+}
+export const companyProfileApi = {
+  get: async (): Promise<CompanyProfile> =>
+    (await api.get('/system/company-profile')).data,
+  update: async (input: Partial<Omit<CompanyProfile, 'id'>>): Promise<CompanyProfile> =>
+    (await api.put('/system/company-profile', input)).data,
+};
+
+// Generic key-value system settings (e.g. tokens.externalEntryRequired \u2014 #14).
+export interface SystemSettingRow {
+  key: string;
+  category: string;
+  value: unknown;
+  updatedAt?: string;
+  updatedBy?: string | null;
+}
+
+export const systemSettingsApi = {
+  get: async (key: string): Promise<SystemSettingRow | null> => {
+    try {
+      return (await api.get(`/system/settings/${encodeURIComponent(key)}`)).data;
+    } catch (err: unknown) {
+      // 404 = setting not configured \u2192 treat as null so callers can default.
+      // 403 = caller lacks SYSTEM_SETTINGS_MANAGE \u2192 also treat as null so
+      // non-admin pages (e.g. token cancel) can fall back to defaults silently.
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 404 || status === 403) return null;
+      throw err;
+    }
+  },
+  upsert: async (
+    key: string,
+    body: { category: string; value: unknown },
+  ): Promise<SystemSettingRow> =>
+    (await api.put(`/system/settings/${encodeURIComponent(key)}`, body)).data,
+};
 
 export const salesBillApi = {
   list: async (q?: SalesBillListQuery): Promise<PageResult<SalesBillRow>> =>
@@ -239,14 +377,22 @@ export interface PurchaseEntryPassRow {
   driverMobile: string | null;
   supplierId: string;
   supplierNameSnapshot: string;
-  workCentreId: string;
+  workCentreId: string | null;
   itemId: string;
   itemNameSnapshot: string;
   loadWeight: string;
+  crRefNo?: string | null;
+  anprImageRef?: string | null;
+  anprNumberPlateText?: string | null;
+  loadImageRef?: string | null;
   status: PurchaseEntryStatus;
   createdById: string;
   createdAt: string;
   updatedAt: string;
+  supplier?: { id: string; code: string; name: string } | null;
+  workCentre?: { id: string; code: string; name: string } | null;
+  item?: { id: string; code: string; name: string } | null;
+  bills?: { id: string; purchaseNo: string; status: string }[];
 }
 
 export interface PurchaseEntryPassListQuery {
@@ -265,10 +411,13 @@ export interface PurchaseEntryPassCreateInput {
   driverNameSnapshot?: string | null;
   driverMobile?: string | null;
   supplierId: string;
-  workCentreId: string;
+  workCentreId?: string | null;
   itemId: string;
   loadWeight: number;
   crRefNo?: string | null;
+  anprImageRef?: string | null;
+  anprNumberPlateText?: string | null;
+  loadImageRef?: string | null;
 }
 
 export const purchaseEntryPassApi = {
@@ -308,7 +457,30 @@ export interface PurchaseBillRow {
   gstPercent: string;
   gstAmount: string;
   grossPayable: string;
+  confirmationReason: string | null;
   paymentMode: string;
+  anprImageRef?: string | null;
+  loadImageRef?: string | null;
+  driverNameSnapshot?: string | null;
+  cancelledReason?: string | null;
+  supplier?: {
+    id: string;
+    code: string;
+    name: string;
+    address?: string | null;
+    gstNumber?: string | null;
+    phone?: string | null;
+  } | null;
+  workCentre?: { id: string; code: string; name: string } | null;
+  item?: { id: string; code: string; name: string } | null;
+  entryPass?: {
+    id: string;
+    passNo: string;
+    status: PurchaseEntryStatus;
+    anprImageRef?: string | null;
+    anprNumberPlateText?: string | null;
+    loadImageRef?: string | null;
+  } | null;
   status: PurchaseBillStatus;
   createdById: string;
   createdAt: string;
@@ -340,6 +512,9 @@ export interface PurchaseBillCreateInput {
   rate: number;
   gstPercent?: number;
   paymentMode?: PurchasePaymentMode;
+  confirmationReason?: string | null;
+  anprImageRef?: string | null;
+  loadImageRef?: string | null;
 }
 
 export const purchaseBillApi = {
@@ -767,6 +942,71 @@ export const rawMaterialEntryApi = {
     (await api.get(`/production/raw-material-entries${qs(q)}`)).data,
   get: async (id: string): Promise<RawMaterialEntryRow> =>
     (await api.get(`/production/raw-material-entries/${id}`)).data,
+};
+
+/* ------------------------------------------------------------------ */
+/* Purchase Consumption (Raw Material — Purchase Wise)                 */
+/* ------------------------------------------------------------------ */
+
+export type PurchaseConsumptionStatus = 'NEW' | 'CONSUMED' | 'IN_STOCK' | 'UNDEFINED';
+
+export interface PurchaseConsumptionRow {
+  id: string;
+  purchaseBillId: string;
+  itemId: string;
+  quantity: string;
+  status: PurchaseConsumptionStatus;
+  createdByShiftId: string | null;
+  updatedByShiftId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  purchaseBill: {
+    id: string;
+    purchaseNo: string;
+    purchaseDateTime: string;
+    supplierId: string;
+    supplierNameSnapshot: string;
+    itemId: string;
+    itemNameSnapshot: string;
+    netWeight: string;
+    status: 'DRAFT' | 'POSTED' | 'CANCELLED';
+  };
+  createdByShift?: { id: string; shiftNo: string; shiftDate: string } | null;
+  updatedByShift?: { id: string; shiftNo: string; shiftDate: string } | null;
+}
+
+export interface PurchaseConsumptionStats {
+  shiftId: string | null;
+  totalBills: number;
+  totalQty: number;
+  consumedQty: number;
+  inStockQty: number;
+  newQty: number;
+  undefinedQty: number;
+  consumptionRate: number;
+}
+
+export const purchaseConsumptionApi = {
+  list: async (q?: {
+    shiftId?: string;
+    status?: PurchaseConsumptionStatus;
+    search?: string;
+    includePreviousUndefined?: boolean;
+  }): Promise<{ items: PurchaseConsumptionRow[]; shiftId: string | null }> =>
+    (await api.get(`/production/purchase-consumptions${qs(q)}`)).data,
+  stats: async (shiftId?: string): Promise<PurchaseConsumptionStats> =>
+    (await api.get(`/production/purchase-consumptions/stats${qs({ shiftId })}`)).data,
+  blocking: async (shiftId?: string): Promise<{ count: number; shiftId: string | null }> =>
+    (await api.get(`/production/purchase-consumptions/blocking${qs({ shiftId })}`)).data,
+  undefinedPending: async (): Promise<{ items: PurchaseConsumptionRow[] }> =>
+    (await api.get('/production/purchase-consumptions/undefined-pending')).data,
+  bulkUpdate: async (
+    ids: string[],
+    status: Exclude<PurchaseConsumptionStatus, never>,
+  ): Promise<{ count: number }> =>
+    (await api.patch('/production/purchase-consumptions/bulk', { ids, status })).data,
+  updateOne: async (id: string, status: PurchaseConsumptionStatus): Promise<PurchaseConsumptionRow> =>
+    (await api.patch(`/production/purchase-consumptions/${id}`, { status })).data,
 };
 
 /* ------------------------------------------------------------------ */

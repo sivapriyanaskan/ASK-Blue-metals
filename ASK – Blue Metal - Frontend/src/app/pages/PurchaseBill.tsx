@@ -430,6 +430,8 @@ export const PurchaseBill = () => {
               <WeighbridgeDisplay 
                 onWeightCapture={handleWeightCapture}
                 externalCapturedWeight={loadWeight}
+                simulationMinWeight={(selectedPass?.emptyWeight ?? 7000) + 10000}
+                simulationMaxWeight={(selectedPass?.emptyWeight ?? 7000) + 15000}
               />
             </div>
             <div className="col-span-1">

@@ -22,10 +22,15 @@ const Create = z.object({
   driverNameSnapshot: z.string().trim().max(120).optional().nullable(),
   driverMobile: z.string().trim().max(20).optional().nullable(),
   supplierId: z.string().min(1),
-  workCentreId: z.string().min(1),
+  // #30 — Work Centre is now optional. Field retained for legacy data
+  // but no longer required for new entry passes.
+  workCentreId: z.string().min(1).optional().nullable(),
   itemId: z.string().min(1),
   loadWeight: z.coerce.number().nonnegative(),
   crRefNo: z.string().trim().max(50).optional().nullable(),
+  anprImageRef: z.string().trim().max(500).optional().nullable(),
+  anprNumberPlateText: z.string().trim().max(32).optional().nullable(),
+  loadImageRef: z.string().trim().max(500).optional().nullable(),
 });
 
 const Cancel = z.object({ cancelledReason: z.string().trim().min(3).max(500) });
@@ -90,8 +95,10 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
 
   const supplier = await prisma.supplier.findUnique({ where: { id: data.supplierId } });
   if (!supplier) return res.status(422).json({ message: 'Supplier not found' });
-  const workCentre = await prisma.workCentre.findUnique({ where: { id: data.workCentreId } });
-  if (!workCentre) return res.status(422).json({ message: 'Work centre not found' });
+  if (data.workCentreId) {
+    const workCentre = await prisma.workCentre.findUnique({ where: { id: data.workCentreId } });
+    if (!workCentre) return res.status(422).json({ message: 'Work centre not found' });
+  }
   const item = await prisma.item.findUnique({ where: { id: data.itemId } });
   if (!item) return res.status(422).json({ message: 'Item not found' });
 
@@ -116,11 +123,14 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
       driverMobile: data.driverMobile ?? null,
       supplierId: data.supplierId,
       supplierNameSnapshot: supplier.name,
-      workCentreId: data.workCentreId,
+      workCentreId: data.workCentreId ?? null,
       itemId: data.itemId,
       itemNameSnapshot: item.name,
       loadWeight: data.loadWeight,
       crRefNo: data.crRefNo ?? null,
+      anprImageRef: data.anprImageRef ?? null,
+      anprNumberPlateText: data.anprNumberPlateText ?? null,
+      loadImageRef: data.loadImageRef ?? null,
       status: 'OPEN',
       createdById: actor.actorId ?? 'system',
     },

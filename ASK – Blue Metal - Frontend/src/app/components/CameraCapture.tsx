@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Camera, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import { Camera, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 
 interface CameraCaptureProps {
   label: string;
@@ -13,6 +13,7 @@ interface CameraCaptureProps {
   onCapture?: (imageData: string) => void;
   autoCapture?: boolean;
   externalCaptured?: boolean;
+  hideControls?: boolean;
 }
 
 const API_BASE =
@@ -25,6 +26,7 @@ export const CameraCapture = ({
   onCapture,
   autoCapture = false,
   externalCaptured = false,
+  hideControls = false,
 }: CameraCaptureProps) => {
   const [captured, setCaptured] = useState(false);
   const [imageData, setImageData] = useState<string | null>(null);
@@ -32,11 +34,25 @@ export const CameraCapture = ({
   const [busy, setBusy] = useState(false);
   // Cache-buster used to retry the MJPEG <img> on demand.
   const [streamNonce, setStreamNonce] = useState(() => Date.now());
+  // Stream is paused only when the tab itself is hidden. When the user
+  // navigates to another route, this component unmounts and the cleanup
+  // effect below tears the connection down completely.
+  const [tabVisible, setTabVisible] = useState(
+    typeof document !== 'undefined' ? document.visibilityState !== 'hidden' : true,
+  );
+  // True until the first MJPEG frame is rendered, so we can show a loader.
+  const [streamLoading, setStreamLoading] = useState(true);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const lastTriggeredRef = useRef(false);
 
-  const liveUrl = cameraId
+  const liveUrl = cameraId && tabVisible
     ? `${API_BASE}/cameras/${encodeURIComponent(cameraId)}/stream.mjpg?t=${streamNonce}`
     : null;
+
+  // Reset the loader whenever the live URL changes (mount, retry, resume).
+  useEffect(() => {
+    if (liveUrl) setStreamLoading(true);
+  }, [liveUrl]);
 
   const doCapture = async () => {
     if (busy) return;
@@ -95,6 +111,43 @@ export const CameraCapture = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoCapture, cameraId]);
 
+  // Forcefully detach an MJPEG <img>. Setting `src=''` is NOT reliable for
+  // `multipart/x-mixed-replace` — most browsers keep the socket open. We
+  // must navigate to `about:blank`, then remove the attribute, then unmount.
+  const teardownImg = () => {
+    const img = imgRef.current;
+    if (!img) return;
+    try {
+      img.onload = null;
+      img.onerror = null;
+      img.src = 'about:blank';
+      img.removeAttribute('src');
+    } catch { /* noop */ }
+  };
+
+  // Pause/resume the stream based on tab visibility.
+  useEffect(() => {
+    const handler = () => setTabVisible(document.visibilityState !== 'hidden');
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
+
+  // When the tab is hidden, force the browser to tear down the existing
+  // connection so ffmpeg on the server exits promptly.
+  useEffect(() => {
+    if (!tabVisible) teardownImg();
+  }, [tabVisible]);
+
+  // On unmount (route change), tear down synchronously BEFORE React removes
+  // the <img> from the DOM. useLayoutEffect cleanup runs synchronously
+  // before the DOM mutation, which is what we need to guarantee the socket
+  // closes immediately.
+  useLayoutEffect(() => {
+    return () => {
+      teardownImg();
+    };
+  }, []);
+
   const handleReset = () => {
     setCaptured(false);
     setImageData(null);
@@ -129,14 +182,31 @@ export const CameraCapture = ({
               </div>
             </div>
           ) : liveUrl && !streamError ? (
-            <div className="w-full aspect-video bg-black rounded overflow-hidden">
+            <div className="w-full aspect-video bg-black rounded overflow-hidden relative">
               <img
+                ref={imgRef}
                 key={streamNonce}
                 src={liveUrl}
                 alt={`${label} live feed`}
                 className="w-full h-full object-contain"
+                onLoad={() => setStreamLoading(false)}
                 onError={() => setStreamError(true)}
               />
+              {streamLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80">
+                  <div className="text-center px-2">
+                    <Loader2 className="w-8 h-8 text-blue-400 mx-auto mb-1 animate-spin" />
+                    <div className="text-xs text-gray-300">Connecting to camera…</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : cameraId && !tabVisible && !streamError ? (
+            <div className="w-full aspect-video bg-gray-900 rounded flex items-center justify-center">
+              <div className="text-center px-2">
+                <Camera className="w-8 h-8 text-gray-600 mx-auto mb-1" />
+                <div className="text-xs text-gray-500">Stream paused</div>
+              </div>
             </div>
           ) : (
             <div className="w-full aspect-video bg-gray-900 rounded flex items-center justify-center">
@@ -168,24 +238,26 @@ export const CameraCapture = ({
           )}
         </div>
 
-        <div className="mt-2">
-          {!captured ? (
-            <button
-              onClick={doCapture}
-              disabled={busy || (cameraId !== undefined && streamError)}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-1.5 rounded font-medium text-xs transition-colors"
-            >
-              {busy ? 'Capturing…' : 'Capture'}
-            </button>
-          ) : (
-            <button
-              onClick={handleReset}
-              className="w-full bg-gray-600 hover:bg-gray-700 text-white py-1.5 rounded font-medium text-xs transition-colors"
-            >
-              Retake
-            </button>
-          )}
-        </div>
+        {!hideControls && (
+          <div className="mt-2">
+            {!captured ? (
+              <button
+                onClick={doCapture}
+                disabled={busy || (cameraId !== undefined && streamError)}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white py-1.5 rounded font-medium text-xs transition-colors"
+              >
+                {busy ? 'Capturing…' : 'Capture'}
+              </button>
+            ) : (
+              <button
+                onClick={handleReset}
+                className="w-full bg-gray-600 hover:bg-gray-700 text-white py-1.5 rounded font-medium text-xs transition-colors"
+              >
+                Retake
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

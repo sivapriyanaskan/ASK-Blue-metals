@@ -17,6 +17,7 @@ import {
   onAuthExpired,
 } from '../utils/api';
 import { buildDisplayName, pickPrimaryRole } from '../utils/roles';
+import { shiftApi } from '../services/operationsApi';
 
 export type UserRole = 'Admin' | 'Operator' | 'Billing Staff' | 'Supervisor' | 'Accounts';
 
@@ -62,6 +63,7 @@ interface AppContextType {
   hasPermission: (code: string) => boolean;
   shiftStatus: ShiftStatus;
   setShiftStatus: (status: ShiftStatus) => void;
+  refreshShiftStatus: () => Promise<void>;
   hardwareDevices: HardwareDevice[];
   setHardwareDevices: (devices: HardwareDevice[]) => void;
   currentWeight: number;
@@ -98,11 +100,36 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
   const [shiftStatus, setShiftStatus] = useState<ShiftStatus>({
-    isOpen: true,
-    shiftNumber: 2,
-    startedBy: 'Rajesh Kumar',
-    startTime: '14:00:00',
+    isOpen: false,
+    shiftNumber: 0,
+    startedBy: '',
+    startTime: '',
   });
+
+  // Sync the local shift indicator with the API. Called on bootstrap and
+  // after login so the sidebar pill and Shift Open/Close screens always
+  // reflect the actual database state (the previous hardcoded default
+  // caused the Shift Open screen to think a shift was active when none
+  // existed in the DB).
+  const refreshShiftStatus = useCallback(async () => {
+    try {
+      const res = await shiftApi.list({ status: 'OPEN', pageSize: 1 });
+      const open = res.items?.[0];
+      if (open) {
+        const num = Number(String(open.shiftNo).replace(/[^0-9]/g, '')) || 0;
+        setShiftStatus({
+          isOpen: true,
+          shiftNumber: num,
+          startedBy: open.openedBySnapshot || '',
+          startTime: open.openedAt ? new Date(open.openedAt).toLocaleTimeString() : '',
+        });
+      } else {
+        setShiftStatus({ isOpen: false, shiftNumber: 0, startedBy: '', startTime: '' });
+      }
+    } catch {
+      // Permission denied / network error — leave the previous state intact.
+    }
+  }, []);
 
   const [hardwareDevices, setHardwareDevices] = useState<HardwareDevice[]>([
     { name: 'Weighbridge 1', type: 'weighbridge', status: 'online' },
@@ -143,18 +170,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setUser(toDisplayUser(me));
       setIsAuthenticated(true);
       setIsAuthLoading(false);
+      void refreshShiftStatus();
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshShiftStatus]);
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await loginRequest(username, password);
     setAccessToken(res.accessToken);
     setUser(toDisplayUser(res.user));
     setIsAuthenticated(true);
-  }, []);
+    void refreshShiftStatus();
+  }, [refreshShiftStatus]);
 
   const logout = useCallback(async () => {
     await logoutRequest();
@@ -179,6 +208,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       hasPermission,
       shiftStatus,
       setShiftStatus,
+      refreshShiftStatus,
       hardwareDevices,
       setHardwareDevices,
       currentWeight,

@@ -192,7 +192,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-generated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -216,7 +215,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-filled with current time</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -242,7 +240,6 @@ export const ShiftManagementCreate = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                   required
                 />
-                <p className="text-xs text-gray-500 mt-1">Cash amount at shift start</p>
               </div>
             </div>
           </div>
@@ -260,7 +257,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Invoice Total</label>
@@ -271,7 +267,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Billing Total</label>
@@ -282,7 +277,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Voucher Total</label>
@@ -293,7 +287,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Payment Voucher Total</label>
@@ -304,7 +297,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Bata Paid</label>
@@ -315,7 +307,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Purchase Total</label>
@@ -326,7 +317,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Total Cash Received</label>
@@ -337,7 +327,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Net Amount</label>
@@ -348,7 +337,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Cash in Hand</label>
@@ -359,7 +347,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 font-semibold"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
             </div>
           </div>
@@ -426,7 +413,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Closing Amount</label>
@@ -437,7 +423,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
             </div>
           </div>
@@ -505,7 +490,6 @@ export const ShiftManagementCreate = () => {
                         disabled
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                       />
-                      <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
                     </div>
                     <div>
                       <button
@@ -529,7 +513,6 @@ export const ShiftManagementCreate = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
-                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
             </div>
           </div>

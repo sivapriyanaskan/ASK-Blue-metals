@@ -1,20 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Save, ArrowLeft, AlertCircle, Printer, Loader2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import { WeighbridgeDisplay } from '../components/WeighbridgeDisplay';
 import { CameraCapture } from '../components/CameraCapture';
-import { BarrierControl } from '../components/BarrierControl';
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
+import { useAppContext } from '../context/AppContext';
 import {
   suppliersApi, type SupplierRow,
   itemsApi, type ItemRow,
+  supplierRatesApi,
   workCentresApi, type WorkCentreRow,
   describeError,
 } from '../services/mastersApi';
 import { purchaseEntryPassApi, type PurchaseEntryPassCreateInput } from '../services/operationsApi';
 
+const API_BASE =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+  'http://localhost:4000/api/v1';
+
 export const PurchaseEntryPassCreate = () => {
   const navigate = useNavigate();
+  const { currentWeight, isWeightStable } = useAppContext();
 
   // ── Master data ──────────────────────────────────────────────────────────
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
@@ -36,13 +42,15 @@ export const PurchaseEntryPassCreate = () => {
   const [weightCapturedAt, setWeightCapturedAt] = useState('');
   const [anprCaptured, setAnprCaptured] = useState(false);
   const [loadCaptured, setLoadCaptured] = useState(false);
-  const [barrierStatus, setBarrierStatus] = useState<'Closed' | 'Opened' | 'Opening'>('Closed');
+  const [anprImageRef, setAnprImageRef] = useState<string | null>(null);
+  const [loadImageRef, setLoadImageRef] = useState<string | null>(null);
 
   // ── UI state ─────────────────────────────────────────────────────────────
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedPassId, setSavedPassId] = useState<string | null>(null);
+  const [itemAutofillHint, setItemAutofillHint] = useState('');
 
   // ── Load masters ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -63,28 +71,94 @@ export const PurchaseEntryPassCreate = () => {
   }, []);
 
   // ── Derived values ───────────────────────────────────────────────────────
-  const selectedSupplier = suppliers.find(s => s.id === supplierId) as (SupplierRow & { vehicles?: { vehicleNumber: string; driverName?: string | null; driverPhone?: string | null }[] }) | undefined;
-  const vehicleOptions = selectedSupplier?.vehicles?.filter(v => v.isActive !== false).map(v => ({
-    value: v.vehicleNumber,
-    label: v.vehicleNumber,
-  })) ?? [];
+  const selectedSupplier = suppliers.find(s => s.id === supplierId);
+  const vehicleOptions = useMemo(() =>
+    suppliers.flatMap((s) =>
+      (s.vehicles ?? [])
+        .filter((v) => v.isActive !== false)
+        .map((v) => ({
+          value: v.vehicleNumber,
+          label: `${v.vehicleNumber} / ${s.name}`,
+          description: `${v.driverName ?? '-'}${v.driverPhone ? ` · ${v.driverPhone}` : ''}`,
+          supplierId: s.id,
+          driverName: v.driverName ?? '',
+          driverPhone: v.driverPhone ?? '',
+        })),
+    ),
+  [suppliers]);
+  const selectedVehicle = selectedSupplier?.vehicles?.find(v => v.vehicleNumber === vehicleNo) as ({ emptyWeight?: number } | undefined);
+  const selectedVehicleEmptyWeight = Number(selectedVehicle?.emptyWeight ?? 7000);
 
   const handleSupplierChange = (id: string) => {
     setSupplierId(id);
     setVehicleNo('');
     setDriverName('');
     setDriverMobile('');
+    setItemId('');
+    setItemAutofillHint('');
     setValidationErrors(e => ({ ...e, supplierId: '', vehicleNo: '' }));
   };
 
-  const handleVehicleChange = (vNo: string) => {
+  const handleVehicleChange = async (vNo: string) => {
     setVehicleNo(vNo);
-    const v = selectedSupplier?.vehicles?.find(x => x.vehicleNumber === vNo);
-    if (v) {
-      setDriverName(v.driverName ?? '');
-      setDriverMobile(v.driverPhone ?? '');
+    const selected = vehicleOptions.find((v) => v.value === vNo);
+    if (selected) {
+      setSupplierId(selected.supplierId);
+      setDriverName(selected.driverName);
+      setDriverMobile(selected.driverPhone);
+
+      // Auto-fill item from latest entry-pass history for this vehicle+supplier,
+      // fallback to first active supplier rate item.
+      let nextItemId = '';
+      let hint = '';
+      try {
+        const recent = await purchaseEntryPassApi.list({ pageSize: 100, search: vNo });
+        const match = recent.items.find(
+          (p) =>
+            p.supplierId === selected.supplierId &&
+            p.vehicleNoSnapshot.toUpperCase() === vNo.toUpperCase(),
+        );
+        if (match?.itemId) {
+          nextItemId = match.itemId;
+          hint = 'Item auto-filled from last pass for this vehicle.';
+        }
+      } catch {
+        // Non-blocking; fallback below.
+      }
+
+      if (!nextItemId) {
+        try {
+          const rates = await supplierRatesApi.list({ supplierId: selected.supplierId, isActive: true, pageSize: 1 });
+          if (rates.items[0]?.itemId) {
+            nextItemId = rates.items[0].itemId;
+            hint = 'Item auto-filled from supplier rate.';
+          }
+        } catch {
+          // Non-blocking.
+        }
+      }
+
+      if (nextItemId) {
+        setItemId(nextItemId);
+        setValidationErrors((e) => ({ ...e, itemId: '' }));
+      }
+      setItemAutofillHint(hint);
     }
-    setValidationErrors(e => ({ ...e, vehicleNo: '' }));
+    setValidationErrors(e => ({ ...e, vehicleNo: '', supplierId: '' }));
+  };
+
+  const captureCameraImage = async (cameraId: 'front' | 'top'): Promise<string | null> => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/cameras/${encodeURIComponent(cameraId)}/capture`,
+        { method: 'POST', credentials: 'include' },
+      );
+      if (!res.ok) return null;
+      const json = (await res.json()) as { url?: string };
+      return json.url ?? null;
+    } catch {
+      return null;
+    }
   };
 
   // ── Validation ───────────────────────────────────────────────────────────
@@ -93,8 +167,7 @@ export const PurchaseEntryPassCreate = () => {
     if (!supplierId) errors.supplierId = 'Supplier is required';
     if (!vehicleNo.trim()) errors.vehicleNo = 'Vehicle No is required';
     if (!itemId) errors.itemId = 'Raw Material Item is required';
-    if (!workCentreId) errors.workCentreId = 'Work Centre is required';
-    if (loadWeight <= 0) errors.loadWeight = 'Capture load weight from weighbridge before saving';
+    // #30 — Work Centre no longer required.
     setValidationErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -104,22 +177,48 @@ export const PurchaseEntryPassCreate = () => {
     setSaveError(null);
     if (!validate()) return;
 
+    let effectiveLoadWeight = loadWeight;
+    if (effectiveLoadWeight <= 0) {
+      if (!isWeightStable || currentWeight <= 0) {
+        setValidationErrors((e) => ({ ...e, loadWeight: 'Waiting for stable weighbridge reading. Try save again in a moment.' }));
+        return;
+      }
+      effectiveLoadWeight = currentWeight / 1000;
+      setLoadWeight(effectiveLoadWeight);
+      setWeightCapturedAt(new Date().toLocaleString('en-IN', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true,
+      }));
+      setValidationErrors((e) => ({ ...e, loadWeight: '' }));
+    }
+
+    const [frontImageRef, topImageRef] = await Promise.all([
+      captureCameraImage('front'),
+      captureCameraImage('top'),
+    ]);
+
+    setAnprImageRef(frontImageRef);
+    setLoadImageRef(topImageRef);
+    setAnprCaptured(!!frontImageRef);
+    setLoadCaptured(!!topImageRef);
+
     const input: PurchaseEntryPassCreateInput = {
       vehicleNoSnapshot: vehicleNo.trim(),
       driverNameSnapshot: driverName.trim() || null,
       driverMobile: driverMobile.trim() || null,
       supplierId,
-      workCentreId,
+      workCentreId: workCentreId || null,
       itemId,
-      loadWeight,             // already in TONS
+      loadWeight: effectiveLoadWeight,             // in TONS
       crRefNo: crRefNo.trim() || null,
+      anprImageRef: frontImageRef ?? anprImageRef ?? null,
+      loadImageRef: topImageRef ?? loadImageRef ?? null,
     };
 
     setIsSaving(true);
     try {
       const created = await purchaseEntryPassApi.create(input);
       setSavedPassId(created.id);
-      setBarrierStatus('Opened');
       setTimeout(() => navigate(`/operations/purchase-entry-pass/${created.id}`), 2000);
     } catch (err) {
       setSaveError(describeError(err, 'Failed to create entry pass'));
@@ -149,8 +248,9 @@ export const PurchaseEntryPassCreate = () => {
       </div>
 
       {/* ── Hardware row ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="col-span-1">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-6">
+        <div className="lg:col-span-4 min-h-[420px] flex flex-col gap-4">
+          <div className="flex-1 min-h-[200px]">
           <WeighbridgeDisplay
             onWeightCapture={(weightKg) => {
               setLoadWeight(weightKg / 1000); // KG → TON
@@ -160,27 +260,38 @@ export const PurchaseEntryPassCreate = () => {
               }));
               setValidationErrors(e => ({ ...e, loadWeight: '' }));
             }}
+            autoCapture
+            hideControls
             externalCapturedWeight={loadWeight > 0 ? loadWeight * 1000 : null}
+            simulationMinWeight={selectedVehicleEmptyWeight + 10000}
+            simulationMaxWeight={selectedVehicleEmptyWeight + 15000}
           />
+          </div>
+          <div className="flex-1 min-h-[200px]">
+            <CameraCapture
+              label="Top Camera"
+              cameraId="top"
+              onCapture={(ref) => {
+                setLoadImageRef(ref);
+                setLoadCaptured(true);
+              }}
+              autoCapture
+              externalCaptured={loadCaptured}
+              hideControls
+            />
+          </div>
         </div>
-        <div className="col-span-1">
+        <div className="lg:col-span-8 min-h-[420px]">
           <CameraCapture
             label="Front Camera"
-            onCapture={() => setAnprCaptured(true)}
+            cameraId="front"
+            onCapture={(ref) => {
+              setAnprImageRef(ref);
+              setAnprCaptured(true);
+            }}
+            autoCapture
             externalCaptured={anprCaptured}
-          />
-        </div>
-        <div className="col-span-1">
-          <CameraCapture
-            label="Top Camera"
-            onCapture={() => setLoadCaptured(true)}
-            externalCaptured={loadCaptured}
-          />
-        </div>
-        <div className="col-span-1">
-          <BarrierControl
-            externalStatus={barrierStatus}
-            onOpen={() => setBarrierStatus('Opened')}
+            hideControls
           />
         </div>
       </div>
@@ -222,42 +333,32 @@ export const PurchaseEntryPassCreate = () => {
           </div>
         </div>
 
-        {/* ── Supplier & Vehicle ───────────────────────────────────────── */}
+        {/* ── Vehicle First Flow ───────────────────────────────────────── */}
         <div className="bg-white rounded-lg border border-gray-300 p-6">
-          <h3 className="font-semibold mb-4">Supplier & Vehicle Details *</h3>
+          <h3 className="font-semibold mb-4">Vehicle & Supplier Details *</h3>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Supplier *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Vehicle No *</label>
               <SearchableDropdown
-                options={suppliers.map(s => ({ value: s.id, label: `${s.code} — ${s.name}` }))}
-                value={supplierId}
-                onValueChange={handleSupplierChange}
-                placeholder="Select Supplier"
+                options={vehicleOptions}
+                value={vehicleNo}
+                onValueChange={(v) => { void handleVehicleChange(v); }}
+                placeholder={vehicleOptions.length ? 'Search Vehicle (auto-fills supplier & driver)' : 'No vehicles available'}
+                disabled={vehicleOptions.length === 0}
               />
-              {validationErrors.supplierId && <p className="text-xs text-red-500 mt-1">{validationErrors.supplierId}</p>}
+              {validationErrors.vehicleNo && <p className="text-xs text-red-500 mt-1">{validationErrors.vehicleNo}</p>}
+              {itemAutofillHint && <p className="text-xs text-emerald-600 mt-1">{itemAutofillHint}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Vehicle No *</label>
-              {vehicleOptions.length > 0 ? (
-                <SearchableDropdown
-                  options={vehicleOptions}
-                  value={vehicleNo}
-                  onValueChange={handleVehicleChange}
-                  placeholder="Select Vehicle"
-                  disabled={!supplierId}
-                />
-              ) : (
-                <input
-                  type="text"
-                  value={vehicleNo}
-                  onChange={e => { setVehicleNo(e.target.value.toUpperCase()); setValidationErrors(er => ({ ...er, vehicleNo: '' })); }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
-                  placeholder="e.g. MH02AB1234"
-                  maxLength={20}
-                  disabled={!supplierId}
-                />
-              )}
-              {validationErrors.vehicleNo && <p className="text-xs text-red-500 mt-1">{validationErrors.vehicleNo}</p>}
+              <label className="block text-sm font-medium text-gray-700 mb-1">Supplier *</label>
+              <input
+                type="text"
+                value={selectedSupplier ? `${selectedSupplier.code} — ${selectedSupplier.name}` : ''}
+                readOnly
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100"
+                placeholder="Auto-filled from vehicle"
+              />
+              {validationErrors.supplierId && <p className="text-xs text-red-500 mt-1">{validationErrors.supplierId}</p>}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Driver Name</label>
@@ -289,16 +390,7 @@ export const PurchaseEntryPassCreate = () => {
               />
               {validationErrors.itemId && <p className="text-xs text-red-500 mt-1">{validationErrors.itemId}</p>}
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Work Centre *</label>
-              <SearchableDropdown
-                options={workCentres.map(w => ({ value: w.id, label: `${w.code} — ${w.name}` }))}
-                value={workCentreId}
-                onValueChange={v => { setWorkCentreId(v); setValidationErrors(e => ({ ...e, workCentreId: '' })); }}
-                placeholder="Select Work Centre"
-              />
-              {validationErrors.workCentreId && <p className="text-xs text-red-500 mt-1">{validationErrors.workCentreId}</p>}
-            </div>
+            {/* #30 — Work Centre field removed from new entry passes */}
           </div>
         </div>
 
@@ -317,9 +409,8 @@ export const PurchaseEntryPassCreate = () => {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Weight in KG</label>
               <div className="px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 font-mono">
-                {loadWeight > 0 ? (loadWeight * 1000).toFixed(2) : '—'}
+                {loadWeight > 0 ? (loadWeight * 1000).toFixed(3) : '—'}
               </div>
-              <p className="text-xs text-gray-500 mt-1">Conversion: TON × 1000</p>
             </div>
           </div>
         </div>

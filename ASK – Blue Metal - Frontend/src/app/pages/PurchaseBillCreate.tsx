@@ -4,13 +4,13 @@ import { Save, ArrowLeft, AlertCircle, Scale, Plus, Trash2 } from 'lucide-react'
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import { WeighbridgeDisplay } from '../components/WeighbridgeDisplay';
 import { CameraCapture } from '../components/CameraCapture';
-import { BarrierControl } from '../components/BarrierControl';
 import {
-  purchaseEntryPassApi, purchaseBillApi,
+  purchaseEntryPassApi, purchaseBillApi, systemSettingsApi,
   PurchaseEntryPassRow,
 } from '../services/operationsApi';
 import {
   workCentresApi, banksApi, billSundriesApi, itemsApi, supplierRatesApi,
+  suppliersApi,
   BillSundryRow, ItemRow, describeError,
 } from '../services/mastersApi';
 
@@ -29,6 +29,11 @@ interface BillItem {
   rateOverridden: boolean;
   rateOverrideReason: string;
 }
+
+const DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT = 750000;
+const API_BASE =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+  'http://localhost:4000/api/v1';
 
 export const PurchaseBillCreate = () => {
   const navigate = useNavigate();
@@ -86,20 +91,43 @@ export const PurchaseBillCreate = () => {
   const [loadingData, setLoadingData] = useState(true);
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [highValuePromptOpen, setHighValuePromptOpen] = useState(false);
+  const [confirmationReason, setConfirmationReason] = useState('');
+  const [highValueConfirmationLimit, setHighValueConfirmationLimit] = useState(DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT);
+
+  const formatTon = (value: number) => (value > 0 ? value.toFixed(3) : '---');
+  const computeNextPurchaseNo = (latestPurchaseNo?: string | null) => {
+    const fy = new Date().getFullYear() % 100;
+    if (!latestPurchaseNo) return `10201/${fy}`;
+    const [seqPart, fyPart] = latestPurchaseNo.split('/');
+    const seq = Number(seqPart);
+    const srcFy = Number(fyPart);
+    if (!Number.isFinite(seq) || !Number.isFinite(srcFy) || srcFy !== fy) {
+      return `10201/${fy}`;
+    }
+    return `${seq + 1}/${fy}`;
+  };
 
   useEffect(() => {
     Promise.all([
       purchaseEntryPassApi.list({ status: 'OPEN', pageSize: 200 }),
+      purchaseBillApi.list({ pageSize: 1 }),
       workCentresApi.list({ pageSize: 200, isActive: true }),
       banksApi.list({ pageSize: 200, isActive: true }),
       billSundriesApi.list({ pageSize: 200, isActive: true }),
       itemsApi.list({ pageSize: 200, isActive: true }),
-    ]).then(([passes, wcs, bks, sunds, itms]) => {
+      systemSettingsApi.get('billing.highValueConfirmationLimit').catch(() => null),
+    ]).then(([passes, bills, wcs, bks, sunds, itms, highValueSetting]) => {
       setEntryPasses(passes.items);
+      setPurchaseNo(computeNextPurchaseNo(bills.items[0]?.purchaseNo));
       setWorkCentres(wcs.items.map(wc => ({ id: wc.id, name: wc.name })));
       setBanks(bks.items.map(b => ({ id: b.id, name: b.name })));
       setAvailableSundries(sunds.items);
       setItems(itms.items);
+      const parsedLimit = Number(highValueSetting?.value ?? DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT);
+      if (Number.isFinite(parsedLimit) && parsedLimit >= 0) {
+        setHighValueConfirmationLimit(parsedLimit);
+      }
       setLoadingData(false);
     }).catch(err => {
       setSaveError(describeError(err, 'Failed to load form data'));
@@ -138,29 +166,67 @@ export const PurchaseBillCreate = () => {
     setDriverMobile(pass.driverMobile || '');
     setSupplierId(pass.supplierId);
     setSupplierNameSnapshot(pass.supplierNameSnapshot);
-    setSupplierAddressSnapshot('');
-    setSupplierGstNoSnapshot('');
+    setSupplierAddressSnapshot(pass.supplier?.address ?? '');
+    setSupplierGstNoSnapshot(pass.supplier?.gstNumber ?? '');
     setLoadWeight(Number(pass.loadWeight));
+    setEmptyWeight(0);
+    setNetWeight(0);
+    setWeighbridgeReadingId('');
+    setWeightCapturedAt('');
     setLastEmptyWeight(0);
-    setWorkCentreId(pass.workCentreId);
+    setWorkCentreId(pass.workCentreId ?? '');
     setSupplierType('TON_BASED');
     setVehicleConfig(null);
     setCftValue(0);
+
+    try {
+      const [supplier, prevBills] = await Promise.all([
+        suppliersApi.get(pass.supplierId),
+        purchaseBillApi.list({ pageSize: 100, search: pass.vehicleNoSnapshot }),
+      ]);
+
+      setSupplierAddressSnapshot(supplier.address ?? pass.supplier?.address ?? '');
+      setSupplierGstNoSnapshot(supplier.gstNumber ?? pass.supplier?.gstNumber ?? '');
+
+      const lastVehicleBill = prevBills.items.find(
+        (b) => b.vehicleNoSnapshot.toUpperCase() === pass.vehicleNoSnapshot.toUpperCase()
+          && b.status !== 'CANCELLED',
+      );
+      setLastEmptyWeight(lastVehicleBill ? Number(lastVehicleBill.emptyWeight) : 0);
+    } catch {
+      // Non-blocking prefill: keep fallback values.
+    }
 
     // Fetch supplier rate for this supplier + item
     let rate = 0;
     let rateSource = 'No rate configured';
     try {
+      // First try exact match: supplier + item
       const rateResult = await supplierRatesApi.list({ supplierId: pass.supplierId, itemId: pass.itemId, isActive: true, pageSize: 1 });
       if (rateResult.items.length > 0) {
         rate = Number(rateResult.items[0].rate);
         rateSource = 'Supplier Rate';
+      } else {
+        // Fallback: try any active rate for this supplier (ignore itemId mismatch)
+        const fallbackResult = await supplierRatesApi.list({ supplierId: pass.supplierId, isActive: true, pageSize: 1 });
+        if (fallbackResult.items.length > 0) {
+          rate = Number(fallbackResult.items[0].rate);
+          rateSource = 'Supplier Rate';
+        }
       }
-    } catch { /* keep rate 0 */ }
+    } catch (err) {
+      console.error('[PurchaseBillCreate] Failed to fetch supplier rate:', err);
+    }
 
-    // Get item gstPercent from loaded items
+    // Get item from loaded items (for gstPercent and item-level default rate)
     const item = items.find(i => i.id === pass.itemId);
     const gstPercent = item ? Number(item.gstPercent) : 0;
+
+    // Final fallback: use item master selling price if no supplier-specific rate
+    if (rate <= 0 && item && Number(item.sellingPrice) > 0) {
+      rate = Number(item.sellingPrice);
+      rateSource = 'Item Master Price';
+    }
 
     setBillItems([{
       id: 'auto_' + Date.now(),
@@ -186,22 +252,33 @@ export const PurchaseBillCreate = () => {
   };
 
   const handleCaptureEmptyWeight = (weightKg: number) => {
+    if (!entryPassId || loadWeight <= 0) {
+      return;
+    }
     const weightTon = weightKg / 1000;
     const netWt = Math.max(0, loadWeight - weightTon);
     setEmptyWeight(weightTon);
     setNetWeight(netWt);
     setWeighbridgeReadingId('WB_' + Date.now());
     setWeightCapturedAt(new Date().toISOString().slice(0, 16));
-
-    if (billItems.length > 0) {
-      setBillItems(billItems.map(item => {
-        const qty = netWt;
-        const amount = qty * item.rate;
-        const gstAmount = amount * (item.gstPercent / 100);
-        return { ...item, qty, amount, gstAmount, totalAmount: amount + gstAmount };
-      }));
-    }
   };
+
+  // Keep bill item qty/amount in sync with the captured net weight.
+  // Done as an effect so it tolerates async rate fetches and avoids stale
+  // closures over billItems inside the capture handler.
+  useEffect(() => {
+    if (netWeight <= 0) return;
+    setBillItems(prev => {
+      if (prev.length === 0) return prev;
+      return prev.map((it, idx) => {
+        if (idx !== 0) return it;
+        const qty = netWeight;
+        const amount = qty * it.rate;
+        const gstAmount = amount * (it.gstPercent / 100);
+        return { ...it, qty, amount, gstAmount, totalAmount: amount + gstAmount };
+      });
+    });
+  }, [netWeight]);
 
   const addBillItem = () => {
     const newItem: BillItem = {
@@ -288,21 +365,35 @@ export const PurchaseBillCreate = () => {
       setSaveError('No supplier rate configured for this item. Please set up the rate in Supplier Master before creating a bill.');
       return;
     }
+    if (grossPayable > highValueConfirmationLimit && !confirmationReason.trim()) {
+      setHighValuePromptOpen(true);
+      return;
+    }
     setSaving(true);
     setSaveError('');
     try {
+      const [frontImageRef, topImageRef] = await Promise.all([
+        captureCameraImage('front'),
+        captureCameraImage('top'),
+      ]);
+      setAnprImageRef(frontImageRef ?? '');
+      setLoadImageRef(topImageRef ?? '');
+
       const created = await purchaseBillApi.create({
         entryPassId,
         vehicleNoSnapshot: vehicleNo,
         driverNameSnapshot: driverName || null,
         supplierId,
-        workCentreId,
+        workCentreId: workCentreId || null,
         itemId: mainItem.itemId,
         loadWeight,
         emptyWeight,
         rate: mainItem.rate,
         gstPercent: mainItem.gstPercent,
         paymentMode: (paymentMode as any) || 'CREDIT',
+        confirmationReason: confirmationReason.trim() || null,
+        anprImageRef: frontImageRef || anprImageRef || null,
+        loadImageRef: topImageRef || loadImageRef || null,
       });
       navigate(`/operations/purchase-bill/${created.id}`);
     } catch (err) {
@@ -312,7 +403,21 @@ export const PurchaseBillCreate = () => {
     }
   };
 
-  const hasValidationErrors = !entryPassId || !workCentreId || emptyWeight === 0 || billItems.length === 0;
+  const hasValidationErrors = !entryPassId || emptyWeight === 0 || billItems.length === 0;
+
+  const captureCameraImage = async (cameraId: 'front' | 'top'): Promise<string | null> => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/cameras/${encodeURIComponent(cameraId)}/capture`,
+        { method: 'POST', credentials: 'include' },
+      );
+      if (!res.ok) return null;
+      const json = (await res.json()) as { url?: string };
+      return json.url ?? null;
+    } catch {
+      return null;
+    }
+  };
 
   return (
     <div className="p-6">
@@ -327,23 +432,82 @@ export const PurchaseBillCreate = () => {
         <h1 className="text-2xl font-bold text-gray-900">Create Purchase Bill</h1>
       </div>
 
-      {/* Hardware Components Row - Top Section */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="col-span-1">
-          <WeighbridgeDisplay 
-            onWeightCapture={handleCaptureEmptyWeight}
-            externalCapturedWeight={emptyWeight * 1000}
-          />
+      {highValuePromptOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
+            <h3 className="text-lg font-semibold">High value bill confirmation</h3>
+            <p className="text-sm text-gray-600">
+              This payment amount exceeds ₹{highValueConfirmationLimit.toFixed(2)}. Please record a reason before proceeding.
+            </p>
+            <textarea
+              autoFocus
+              value={confirmationReason}
+              onChange={(e) => setConfirmationReason(e.target.value)}
+              rows={4}
+              className="px-3 py-2 w-full rounded-md border border-gray-300 bg-white text-sm"
+              placeholder="Reason / authorisation reference"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setHighValuePromptOpen(false)}
+                className="px-4 py-2 text-sm rounded-md border bg-white hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!confirmationReason.trim()}
+                onClick={() => {
+                  setHighValuePromptOpen(false);
+                  void handleSave();
+                }}
+                className="px-4 py-2 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                Confirm & Save
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="col-span-1">
+      )}
+
+      {/* Hardware Components Row - Top Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-6">
+        <div className="lg:col-span-4 min-h-[420px] flex flex-col gap-4">
+          <div className="flex-1 min-h-[200px]">
+          <WeighbridgeDisplay
+            key={entryPassId || 'no-pass'}
+            onWeightCapture={handleCaptureEmptyWeight}
+            autoCapture
+            hideControls
+            externalCapturedWeight={emptyWeight > 0 ? emptyWeight * 1000 : null}
+            simulationMinWeight={loadWeight > 0 ? Math.max(0, (loadWeight - 15) * 1000) : undefined}
+            simulationMaxWeight={loadWeight > 0 ? Math.max(0, (loadWeight - 10) * 1000) : undefined}
+          />
+          </div>
+          <div className="flex-1 min-h-[200px]">
+            <CameraCapture
+              label="Top Camera"
+              cameraId="top"
+              onCapture={(img) => {
+                setLoadImagePreview(img);
+                setLoadImageRef(img);
+              }}
+              autoCapture
+              hideControls
+            />
+          </div>
+        </div>
+        <div className="lg:col-span-8 min-h-[420px]">
           <CameraCapture
             label="Front Camera"
+            cameraId="front"
             onCapture={(img) => {
               setAnprImagePreview(img);
-              setAnprImageRef('anpr_' + Date.now());
+              setAnprImageRef(img);
               const extractedPlateText = vehicleNo || 'MH02AB1234';
               setAnprPlateText(extractedPlateText);
-              
+
               // Check for mismatch between ANPR and entered vehicle no
               if (vehicleNo && extractedPlateText !== vehicleNo) {
                 setAnprMismatchWarning(`ANPR detected "${extractedPlateText}" but vehicle no is "${vehicleNo}". Please verify!`);
@@ -351,22 +515,8 @@ export const PurchaseBillCreate = () => {
                 setAnprMismatchWarning('');
               }
             }}
-          />
-        </div>
-        <div className="col-span-1">
-          <CameraCapture
-            label="Top Camera"
-            onCapture={(img) => {
-              setLoadImagePreview(img);
-              setLoadImageRef('load_' + Date.now());
-            }}
-          />
-        </div>
-        <div className="col-span-1">
-          <BarrierControl
-            label="Exit Boom Barrier"
-            onOpen={() => alert('✅ Exit Barrier Opened - Vehicle can leave')}
-            onClose={() => alert('🚧 Exit Barrier Closed')}
+            autoCapture
+            hideControls
           />
         </div>
       </div>
@@ -466,9 +616,9 @@ export const PurchaseBillCreate = () => {
                 </label>
                 <input
                   type="text"
-                  value="Auto-generated"
+                  value={purchaseNo || 'Generating...'}
                   disabled
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-400 font-mono"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700 font-mono"
                 />
               </div>
               <div>
@@ -480,21 +630,6 @@ export const PurchaseBillCreate = () => {
                   value={purchaseDateTime}
                   onChange={(e) => setPurchaseDateTime(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Work Centre *
-                </label>
-                <SearchableDropdown
-                  options={workCentres.map(wc => ({ 
-                    label: wc.name, 
-                    value: wc.id 
-                  }))}
-                  value={workCentreId}
-                  onValueChange={setWorkCentreId}
-                  placeholder="Select Work Centre"
-                  className="w-full"
                 />
               </div>
             </div>
@@ -522,22 +657,24 @@ export const PurchaseBillCreate = () => {
                   </label>
                   <input
                     type="text"
-                    value={lastEmptyWeight || '---'}
+                    value={formatTon(lastEmptyWeight)}
                     disabled
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 font-mono font-medium"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Cu.Ft
-                  </label>
-                  <input
-                    type="text"
-                    value={cftValue > 0 ? cftValue.toFixed(6) : '---'}
-                    disabled
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 font-mono font-medium"
-                  />
-                </div>
+                {supplierType === 'CUBIC_BASED' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Cu.Ft
+                    </label>
+                    <input
+                      type="text"
+                      value={cftValue > 0 ? cftValue.toFixed(6) : '---'}
+                      disabled
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 font-mono font-medium"
+                    />
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -546,9 +683,9 @@ export const PurchaseBillCreate = () => {
                 <input
                   type="text"
                   value={supplierAddressSnapshot}
-                  onChange={(e) => setSupplierAddressSnapshot(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="Enter supplier address"
+                  disabled
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100"
+                  placeholder="Auto-filled from supplier master"
                 />
               </div>
               <div>
@@ -558,9 +695,9 @@ export const PurchaseBillCreate = () => {
                 <input
                   type="text"
                   value={supplierGstNoSnapshot}
-                  onChange={(e) => setSupplierGstNoSnapshot(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
-                  placeholder="27AAAAA0000A1Z5"
+                  disabled
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 font-mono"
+                  placeholder="Auto-filled from supplier master"
                 />
               </div>
             </div>
@@ -579,7 +716,7 @@ export const PurchaseBillCreate = () => {
               </div>
               <div className="p-3 bg-gray-50 border border-gray-300 rounded-lg">
                 <div className="text-xs text-gray-600 mb-1">Last Empty</div>
-                <div className="font-mono font-bold text-lg text-gray-700">{lastEmptyWeight} TON</div>
+                <div className="font-mono font-bold text-lg text-gray-700">{formatTon(lastEmptyWeight)} TON</div>
                 <div className="text-xs text-gray-500 mt-1">Reference</div>
               </div>
               <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg">
@@ -589,7 +726,7 @@ export const PurchaseBillCreate = () => {
               </div>
               <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
                 <div className="text-xs text-green-700 mb-1">Net Weight</div>
-                <div className="font-mono font-bold text-2xl text-green-900">{netWeight.toFixed(2)} TON</div>
+                <div className="font-mono font-bold text-2xl text-green-900">{netWeight.toFixed(3)} TON</div>
                 <div className="text-xs text-green-600 mt-1">Computed</div>
               </div>
             </div>
@@ -685,22 +822,22 @@ export const PurchaseBillCreate = () => {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="min-w-full table-fixed text-sm">
                   <thead className="bg-gray-50 border-b border-gray-300">
                     <tr>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Qty</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Rate</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">GST %</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">V.Rent</th>
+                      <th className="w-[34%] px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item</th>
+                      <th className="w-[10%] px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Qty</th>
+                      <th className="w-[11%] px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Rate</th>
+                      <th className="w-[12%] px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                      <th className="w-[8%] px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">GST %</th>
+                      <th className="w-[12%] px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
+                      <th className="w-[13%] px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">V.Rent</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {billItems.map((item) => (
                       <tr key={item.id} className="bg-blue-50">
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 align-middle">
                           <div className="font-medium text-gray-900">{item.itemNameSnapshot}</div>
                           {item.itemId && (
                             <div className="mt-1">
@@ -716,40 +853,40 @@ export const PurchaseBillCreate = () => {
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 text-right align-middle">
                           <input
                             type="text"
                             value={item.qty.toFixed(2)}
                             disabled
-                            className="w-20 px-2 py-1 border border-gray-300 rounded text-right font-mono bg-gray-100 font-medium"
+                            className="w-full px-2 py-1 border border-gray-300 rounded text-right font-mono bg-gray-100 font-medium"
                           />
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 text-right align-middle">
                           <input
                             type="text"
                             value={item.rate > 0 ? item.rate.toFixed(2) : '—'}
                             disabled
-                            className={`w-24 px-2 py-1 border rounded text-right font-mono font-bold ${
+                            className={`w-full px-2 py-1 border rounded text-right font-mono font-bold ${
                               item.rate > 0 ? 'border-gray-300 bg-gray-50 text-gray-900' : 'border-red-300 bg-red-50 text-red-600'
                             }`}
                           />
                         </td>
-                        <td className="px-3 py-2 text-right font-mono font-medium">₹{item.amount.toFixed(2)}</td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 text-right align-middle font-mono font-medium">₹{item.amount.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right align-middle">
                           <input
                             type="text"
                             value={item.gstPercent}
                             disabled
-                            className="w-16 px-2 py-1 border border-gray-300 rounded text-right bg-gray-100 font-medium"
+                            className="w-full px-2 py-1 border border-gray-300 rounded text-right bg-gray-100 font-medium"
                           />
                         </td>
-                        <td className="px-3 py-2 text-right font-mono font-bold">₹{item.totalAmount.toFixed(2)}</td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 text-right align-middle font-mono font-bold">₹{item.totalAmount.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right align-middle">
                           <input
                             type="number"
                             value={item.vehicleRent}
                             onChange={(e) => updateBillItem(item.id, 'vehicleRent', parseFloat(e.target.value) || 0)}
-                            className="w-20 px-2 py-1 border border-gray-300 rounded text-right"
+                            className="w-full px-2 py-1 border border-gray-300 rounded text-right"
                           />
                         </td>
                       </tr>

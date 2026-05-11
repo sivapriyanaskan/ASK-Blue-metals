@@ -1,9 +1,11 @@
+import { useMemo } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { SearchableDropdown, type SearchableDropdownOption } from './ui/searchable-dropdown';
 
 interface PaymentSectionProps {
   paymentMode: 'CASH' | 'ONLINE' | 'CREDIT' | 'MIXED';
   setPaymentMode: (mode: 'CASH' | 'ONLINE' | 'CREDIT' | 'MIXED') => void;
+  paymentModeClassName?: string;
   receivableAmount: number;
   receivedAmount: number;
   setReceivedAmount: (amount: number) => void;
@@ -34,16 +36,23 @@ interface PaymentSectionProps {
   // Credit fields
   crRefNo: string;
   setCrRefNo: (ref: string) => void;
+
+  // Live cash-in-hand denomination breakdown from the currently open shift.
+  // Used to show the cashier how many notes of each denomination are
+  // physically available before they decide how much change to return.
+  inHandDenominations?: Record<string, number>;
 }
 
 export const PaymentSection = (props: PaymentSectionProps) => {
   const {
-    paymentMode, setPaymentMode, receivableAmount, receivedAmount, setReceivedAmount,
+    paymentMode, setPaymentMode, paymentModeClassName, receivableAmount, receivedAmount, setReceivedAmount,
     balanceAmount, setBalanceAmount, denominations, setDenominations, returnedDenominations,
     setReturnedDenominations, cashCollected, setCashCollected, balanceToBeGiven, setBalanceToBeGiven,
     bankId, setBankId, accountNo, setAccountNo, transactionNo, setTransactionNo, digitalPayment,
-    setDigitalPayment, banks, crRefNo, setCrRefNo
+    setDigitalPayment, banks, crRefNo, setCrRefNo, inHandDenominations,
   } = props;
+
+  const inHand = inHandDenominations ?? {};
 
   // Payment mode options
   const paymentModeOptions: SearchableDropdownOption[] = [
@@ -61,6 +70,22 @@ export const PaymentSection = (props: PaymentSectionProps) => {
       value: bank.id,
       description: bank.accountNumber,
     }));
+
+  const inwardDenominationRows = useMemo(
+    () =>
+      Object.entries(denominations)
+        .filter(([denom]) => Number(denom) !== 2000)
+        .sort((a, b) => Number(b[0]) - Number(a[0])),
+    [denominations],
+  );
+
+  const outwardDenominationRows = useMemo(
+    () =>
+      Object.entries(returnedDenominations)
+        .filter(([denom]) => Number(denom) !== 2000)
+        .sort((a, b) => Number(b[0]) - Number(a[0])),
+    [returnedDenominations],
+  );
 
   const handleDenominationChange = (denom: string, count: number) => {
     const newDenominations = { ...denominations, [denom]: count };
@@ -100,6 +125,7 @@ export const PaymentSection = (props: PaymentSectionProps) => {
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Payment Mode *</label>
           <SearchableDropdown
+            className={paymentModeClassName}
             options={paymentModeOptions}
             value={paymentMode}
             onValueChange={(value) => {
@@ -158,7 +184,7 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(denominations).map(([denom, count], idx) => {
+                    {inwardDenominationRows.map(([denom, count], idx) => {
                       const amount = parseInt(denom) * count;
                       const isEven = idx % 2 === 0;
                       return (
@@ -167,14 +193,14 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                           <td className="px-2 py-1.5 text-center">
                             <input
                               type="number"
-                              value={count}
+                              value={count === 0 ? '' : count}
                               onChange={(e) => handleDenominationChange(denom, parseInt(e.target.value) || 0)}
-                              className="w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center font-semibold"
+                              className={`w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center font-semibold ${idx === 0 ? 'payment-cash-first-input' : ''}`}
                               min="0"
                             />
                           </td>
                           <td className="px-2 py-1.5 text-right font-mono font-semibold">
-                            {amount.toFixed(0)}
+                            {amount > 0 ? amount.toFixed(0) : '–'}
                           </td>
                         </tr>
                       );
@@ -199,28 +225,33 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                   <thead className="bg-orange-100 border-b border-gray-300">
                     <tr>
                       <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Denominations</th>
+                      <th className="px-2 py-1.5 text-center text-xs font-semibold text-gray-700">In Hand</th>
                       <th className="px-2 py-1.5 text-center text-xs font-semibold text-gray-700">Nos</th>
                       <th className="px-2 py-1.5 text-right text-xs font-semibold text-gray-700">Amount</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(returnedDenominations).map(([denom, count], idx) => {
+                    {outwardDenominationRows.map(([denom, count], idx) => {
                       const amount = parseInt(denom) * count;
                       const isEven = idx % 2 === 0;
+                      const available = Number(inHand[denom] ?? 0);
                       return (
                         <tr key={denom} className={`border-b border-gray-300 last:border-b-0 ${isEven ? 'bg-orange-50' : 'bg-white'}`}>
                           <td className="px-2 py-1.5 font-bold text-center text-orange-900">{denom}</td>
+                          <td className="px-2 py-1.5 text-center text-xs font-semibold text-purple-700">
+                            {available > 0 ? `${denom} × ${available}` : '–'}
+                          </td>
                           <td className="px-2 py-1.5 text-center">
                             <input
                               type="number"
-                              value={count}
+                              value={count === 0 ? '' : count}
                               onChange={(e) => handleReturnedDenominationChange(denom, parseInt(e.target.value) || 0)}
                               className="w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center font-semibold"
                               min="0"
                             />
                           </td>
                           <td className="px-2 py-1.5 text-right font-mono font-semibold">
-                            {amount.toFixed(0)}
+                            {amount > 0 ? amount.toFixed(0) : '–'}
                           </td>
                         </tr>
                       );
@@ -322,7 +353,7 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                 onValueChange={(value) => setBankId(value)}
                 placeholder="Select Bank"
                 searchPlaceholder="Search..."
-                className="h-8"
+                className="h-8 payment-bank-enter-target"
               />
             </div>
             <div>
@@ -339,7 +370,7 @@ export const PaymentSection = (props: PaymentSectionProps) => {
               <label className="block text-sm font-medium text-gray-700 mb-1">Digital Payment Amount *</label>
               <input
                 type="number"
-                value={digitalPayment}
+                value={digitalPayment === 0 ? '' : digitalPayment}
                 onChange={(e) => {
                   const amt = parseFloat(e.target.value) || 0;
                   setDigitalPayment(amt);
@@ -375,7 +406,7 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                 type="text"
                 value={crRefNo}
                 onChange={(e) => setCrRefNo(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 font-mono bg-white"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 font-mono bg-white payment-credit-ref-input"
                 placeholder="CR/2026/123"
               />
             </div>
@@ -423,7 +454,7 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(denominations).map(([denom, count], idx) => {
+                    {inwardDenominationRows.map(([denom, count], idx) => {
                       const amount = parseInt(denom) * count;
                       const isEven = idx % 2 === 0;
                       return (
@@ -432,14 +463,14 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                           <td className="px-2 py-1.5 text-center">
                             <input
                               type="number"
-                              value={count}
+                              value={count === 0 ? '' : count}
                               onChange={(e) => handleDenominationChange(denom, parseInt(e.target.value) || 0)}
-                              className="w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center font-semibold"
+                              className={`w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center font-semibold ${idx === 0 ? 'payment-cash-first-input' : ''}`}
                               min="0"
                             />
                           </td>
                           <td className="px-2 py-1.5 text-right font-mono font-semibold">
-                            {amount.toFixed(0)}
+                            {amount > 0 ? amount.toFixed(0) : '–'}
                           </td>
                         </tr>
                       );
@@ -464,28 +495,33 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                   <thead className="bg-orange-100 border-b border-gray-300">
                     <tr>
                       <th className="px-2 py-1.5 text-left text-xs font-semibold text-gray-700">Denominations</th>
+                      <th className="px-2 py-1.5 text-center text-xs font-semibold text-gray-700">In Hand</th>
                       <th className="px-2 py-1.5 text-center text-xs font-semibold text-gray-700">Nos</th>
                       <th className="px-2 py-1.5 text-right text-xs font-semibold text-gray-700">Amount</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(returnedDenominations).map(([denom, count], idx) => {
+                    {outwardDenominationRows.map(([denom, count], idx) => {
                       const amount = parseInt(denom) * count;
                       const isEven = idx % 2 === 0;
+                      const available = Number(inHand[denom] ?? 0);
                       return (
                         <tr key={denom} className={`border-b border-gray-300 last:border-b-0 ${isEven ? 'bg-orange-50' : 'bg-white'}`}>
                           <td className="px-2 py-1.5 font-bold text-center text-orange-900">{denom}</td>
+                          <td className="px-2 py-1.5 text-center text-xs font-semibold text-purple-700">
+                            {available > 0 ? `${denom} × ${available}` : '–'}
+                          </td>
                           <td className="px-2 py-1.5 text-center">
                             <input
                               type="number"
-                              value={count}
+                              value={count === 0 ? '' : count}
                               onChange={(e) => handleReturnedDenominationChange(denom, parseInt(e.target.value) || 0)}
                               className="w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center font-semibold"
                               min="0"
                             />
                           </td>
                           <td className="px-2 py-1.5 text-right font-mono font-semibold">
-                            {amount.toFixed(0)}
+                            {amount > 0 ? amount.toFixed(0) : '–'}
                           </td>
                         </tr>
                       );
@@ -541,6 +577,7 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                   onValueChange={setBankId}
                   placeholder="Select Bank"
                   searchPlaceholder="Search banks..."
+                  className="payment-bank-enter-target"
                 />
               </div>
               <div>
@@ -557,7 +594,7 @@ export const PaymentSection = (props: PaymentSectionProps) => {
                 <label className="block text-xs text-gray-700 mb-1">Digital Payment *</label>
                 <input
                   type="number"
-                  value={digitalPayment}
+                  value={digitalPayment === 0 ? '' : digitalPayment}
                   onChange={(e) => {
                     const amt = parseFloat(e.target.value) || 0;
                     setDigitalPayment(amt);
