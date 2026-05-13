@@ -102,7 +102,6 @@ import { SalesCustomerWise } from './pages/SalesCustomerWise';
 import { PurchaseRegister } from './pages/PurchaseRegister';
 import { PurchaseItemWise } from './pages/PurchaseItemWise';
 import { PurchaseSupplierWise } from './pages/PurchaseSupplierWise';
-import { PurchaseBillWise } from './pages/PurchaseBillWise';
 import { ProductionRegister } from './pages/ProductionRegister';
 import { ProductionItemWise } from './pages/ProductionItemWise';
 import { ProductionPurchaseWise } from './pages/ProductionPurchaseWise';
@@ -123,6 +122,7 @@ import { CommonPrinterSettingsCreate } from './pages/CommonPrinterSettingsCreate
 import { CommonPrinterSettingsEdit } from './pages/CommonPrinterSettingsEdit';
 import { CommonPrinterSettingsDetails } from './pages/CommonPrinterSettingsDetails';
 import { UserManagement } from './pages/UserManagement';
+import { UserView } from './pages/UserView';
 import { AuditLogs } from './pages/AuditLogs';
 
 export const router = createBrowserRouter([
@@ -260,7 +260,6 @@ export const router = createBrowserRouter([
           { path: 'reports/purchase-register', Component: PurchaseRegister },
           { path: 'reports/purchase-item-wise', Component: PurchaseItemWise },
           { path: 'reports/purchase-supplier-wise', Component: PurchaseSupplierWise },
-          { path: 'reports/purchase-bill-wise', Component: PurchaseBillWise },
           { path: 'reports/production-register', Component: ProductionRegister },
           { path: 'reports/production-item-wise', Component: ProductionItemWise },
           { path: 'reports/production-purchase-wise', Component: ProductionPurchaseWise },
@@ -276,6 +275,7 @@ export const router = createBrowserRouter([
           // ── Admin (IAM) ────────────────────────────────────────────────────
           { path: 'admin/audit-logs', Component: AuditLogs },
           { path: 'admin/users', Component: UserManagement },
+          { path: 'admin/users/:id', Component: UserView },
 
           // ── Settings ───────────────────────────────────────────────────────
           { path: 'settings', Component: Settings },

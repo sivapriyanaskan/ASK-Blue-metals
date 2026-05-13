@@ -5,6 +5,7 @@ import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import { WeighbridgeDisplay } from '../components/WeighbridgeDisplay';
 import { CameraCapture } from '../components/CameraCapture';
 import { useAppContext } from '../context/AppContext';
+import { isInvoiceBillingOnly } from '../utils/roles';
 import {
   customersApi,
   itemsApi,
@@ -63,7 +64,8 @@ type VehicleSelection = {
 
 export const TokenCreation = () => {
   const navigate = useNavigate();
-  const { currentWeight, isWeightStable } = useAppContext();
+  const { currentWeight, isWeightStable, user } = useAppContext();
+  const invoiceOnly = isInvoiceBillingOnly(user.roleCodes);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [items, setItems] = useState<ItemRow[]>([]);
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -177,11 +179,16 @@ export const TokenCreation = () => {
   const vehicleOptions = useMemo<VehicleSelection[]>(() => {
     const options: VehicleSelection[] = [];
     customers.forEach((c) => {
+      // Invoice Billing role only deals with GST tax-invoice customers; hide
+      // every other bill type completely so they cannot be picked.
+      if (invoiceOnly && c.billType !== 'TAX_INVOICE') return;
       const billTypeText = c.billType === 'TAX_INVOICE' ? 'Tax Invoice' : 'Invoice';
       (c.vehicles ?? []).forEach((v) => {
         options.push({
           value: `${c.id}::${v.vehicleNumber}`,
-          label: `${v.vehicleNumber} / ${c.name} / ${billTypeText}`,
+          label: invoiceOnly
+            ? `${v.vehicleNumber} / ${c.name}`
+            : `${v.vehicleNumber} / ${c.name} / ${billTypeText}`,
           description: `${v.driverName ?? '-'}${v.driverPhone ? ` · ${v.driverPhone}` : ''}`,
           customerId: c.id,
           vehicleNumber: v.vehicleNumber,
@@ -191,7 +198,7 @@ export const TokenCreation = () => {
       });
     });
     return options;
-  }, [customers]);
+  }, [customers, invoiceOnly]);
 
   const captureCameraImage = async (cameraId: 'front' | 'top'): Promise<string | null> => {
     try {

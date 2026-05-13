@@ -213,6 +213,8 @@ export interface SalesBillTokenRef {
   anprImageRef: string | null;
   anprNumberPlateText: string | null;
   loadImageRef: string | null;
+  /** Customer linked at token-creation time (may differ from final bill customer). */
+  customer?: { id: string; name: string } | null;
 }
 
 export interface SalesBillRow {
@@ -229,6 +231,7 @@ export interface SalesBillRow {
   grossWeight: string;
   netWeight: string;
   rate: string;
+  driverBata: string;
   taxableAmount: string;
   cgstPercent: string;
   sgstPercent: string;
@@ -253,10 +256,14 @@ export interface SalesBillRow {
   shipToAddress: string | null;
   status: SalesBillStatus;
   cancelledReason: string | null;
+  /** JSON array of cash denomination breakdown captured at billing. */
+  denominations?: Array<{ denomination: number; nos: number; amount: number }> | null;
   createdById: string;
   updatedById: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Display name of the user who created the bill (denormalised on list/get). */
+  createdByName?: string | null;
   customer: SalesBillCustomerRef;
   item: SalesBillItemRef;
   token: SalesBillTokenRef | null;
@@ -279,6 +286,7 @@ export interface SalesBillFromTokenInput {
   cashAmount?: number;
   onlineAmount?: number;
   creditAmount?: number;
+  driverBata?: number;
   denominations?: Array<{ denomination: number; nos: number; amount: number }>;
   remarks?: string | null;
   paymentDeferralOption?: 'PAY_NOW' | 'PAY_NEXT_BILL';
@@ -457,6 +465,7 @@ export interface PurchaseBillRow {
   gstPercent: string;
   gstAmount: string;
   grossPayable: string;
+  driverBata: string;
   confirmationReason: string | null;
   paymentMode: string;
   anprImageRef?: string | null;
@@ -483,6 +492,7 @@ export interface PurchaseBillRow {
   } | null;
   status: PurchaseBillStatus;
   createdById: string;
+  createdByName?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -511,6 +521,7 @@ export interface PurchaseBillCreateInput {
   emptyWeight: number;
   rate: number;
   gstPercent?: number;
+  driverBata?: number;
   paymentMode?: PurchasePaymentMode;
   confirmationReason?: string | null;
   anprImageRef?: string | null;
@@ -581,6 +592,8 @@ export interface ShiftListQuery {
   status?: ShiftStatus;
   dateFrom?: string;
   dateTo?: string;
+  openedById?: string;
+  mine?: boolean;
 }
 
 export interface ShiftCreateInput {
@@ -641,6 +654,26 @@ export const shiftApi = {
     })).data,
   listTransferDenominations: async (): Promise<{ items: ShiftTransferDenomRow[]; total: number }> =>
     (await api.get('/operations/shifts/transfer-denominations')).data,
+  downloadReport: async (id: string): Promise<void> => {
+    const res = await api.get(`/operations/shifts/${id}/report.xlsx`, {
+      responseType: 'blob',
+    });
+    // Extract filename from content-disposition, fall back to a default.
+    const cd = (res.headers as Record<string, string>)['content-disposition'] ?? '';
+    const match = /filename="?([^"]+)"?/i.exec(cd);
+    const filename = match?.[1] ?? `Shift_Report_${id}.xlsx`;
+    const blob = new Blob([res.data as BlobPart], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  },
 };
 
 /* ------------------------------------------------------------------ */

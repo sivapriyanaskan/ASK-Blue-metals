@@ -1,16 +1,38 @@
 import { useEffect, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { LockKeyhole, Printer, Search, AlertTriangle } from 'lucide-react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { SearchableDropdown, SearchableDropdownOption } from '../components/ui/searchable-dropdown';
 import { shiftApi, purchaseConsumptionApi, type ShiftRow, type ShiftDenomination } from '../services/operationsApi';
 import { usersApi, type UserRow } from '../services/iamApi';
 import { describeError } from '../services/mastersApi';
+import { AdminActiveShiftsPanel } from '../components/AdminActiveShiftsPanel';
 
 // Fallback staff list (used while users are loading)
 const mockStaffUsers: { id: string; name: string; role: string }[] = [];
 
 export const ShiftClosing = () => {
+  const { user } = useAppContext();
+  const [searchParams] = useSearchParams();
+  // Admin can pass ?shiftId=... to close another user's shift.
+  const targetShiftId = searchParams.get('shiftId');
+  const isAdmin = user.role === 'Admin';
+
+  // When an Admin lands on this page without selecting a specific shift,
+  // show the active-shifts picker instead of an "no open shift" error.
+  if (isAdmin && !targetShiftId) {
+    return (
+      <AdminActiveShiftsPanel
+        title="Shift Close"
+        subtitle="Select an operator's shift to view details and close on their behalf"
+        actionLabel="View / Close"
+      />
+    );
+  }
+  return <ShiftClosingForm targetShiftId={targetShiftId} />;
+};
+
+const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) => {
   const { user, shiftStatus, refreshShiftStatus } = useAppContext();
   const [formData, setFormData] = useState({
     entryDate: new Date().toISOString().split('T')[0],
@@ -54,14 +76,23 @@ export const ShiftClosing = () => {
     let cancelled = false;
     (async () => {
       try {
-        const [shifts, userRes] = await Promise.all([
-          shiftApi.list({ status: 'OPEN', pageSize: 1 }),
-          usersApi.list({ pageSize: 100 }),
-        ]);
+        // If admin opened this page with ?shiftId=..., load that specific
+        // shift; otherwise load the current user's own active shift.
+        const open: ShiftRow | null = targetShiftId
+          ? await shiftApi.get(targetShiftId).catch(() => null)
+          : (await shiftApi.list({ status: 'OPEN', mine: true, pageSize: 1 })).items[0] ?? null;
         if (cancelled) return;
-        const open = shifts.items[0] ?? null;
         setActiveShift(open);
-        setUsers(userRes.items.filter((u) => u.status === 'ACTIVE'));
+        // Users list is optional — only Admin/Supervisor have iam.user.view.
+        // For Billing Staff and other roles, silently skip the dropdown data.
+        usersApi
+          .list({ pageSize: 100 })
+          .then((userRes) => {
+            if (!cancelled) setUsers(userRes.items.filter((u) => u.status === 'ACTIVE'));
+          })
+          .catch(() => {
+            /* permission denied or transient — staff dropdown stays empty */
+          });
         if (open) {
           // Fetch count of NEW purchase consumption rows tied to this shift —
           // these block the close unless the user is strictly entry-way only.
@@ -102,7 +133,9 @@ export const ShiftClosing = () => {
             });
           }
         } else {
-          setLoadError('No open shift found. Please open a shift first.');
+          setLoadError(targetShiftId
+            ? 'Shift not found or already closed.'
+            : 'No open shift found. Please open a shift first.');
         }
       } catch (err) {
         if (!cancelled) setLoadError(describeError(err, 'Failed to load active shift'));
@@ -111,7 +144,7 @@ export const ShiftClosing = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [targetShiftId]);
 
   // Dropdown options for staff
   const staffOptions: SearchableDropdownOption[] = users.map((u) => ({
@@ -191,7 +224,12 @@ export const ShiftClosing = () => {
       });
       setIsClosed(true);
       await refreshShiftStatus();
-      alert('Shift closed successfully! Report generated.');
+      try {
+        await shiftApi.downloadReport(activeShift.id);
+      } catch (reportErr) {
+        console.error('Failed to download shift report', reportErr);
+      }
+      alert('Shift closed successfully! Report downloaded.');
     } catch (err) {
       alert(describeError(err, 'Failed to close shift'));
     } finally {
@@ -254,7 +292,7 @@ export const ShiftClosing = () => {
               </label>
               <input
                 type="text"
-                value={user.name}
+                value={activeShift?.openedBySnapshot || user.name}
                 readOnly
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed"
               />

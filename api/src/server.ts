@@ -2,6 +2,10 @@ import { createApp } from './app.js';
 import { config } from './infra/config.js';
 import { logger } from './infra/logger.js';
 import { prisma } from './infra/db.js';
+import {
+  startShiftAutoCloseScheduler,
+  stopShiftAutoCloseScheduler,
+} from './contexts/operations/shift/auto-close.js';
 
 async function main() {
   const app = createApp();
@@ -20,8 +24,12 @@ async function main() {
     logger.info(`OpenAPI docs at  http://localhost:${config.PORT}/api/v1/docs`);
   });
 
+  // Schedule midnight shift auto-close (IST).
+  startShiftAutoCloseScheduler();
+
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutting down');
+    stopShiftAutoCloseScheduler();
     server.close(async () => {
       await prisma.$disconnect();
       process.exit(0);

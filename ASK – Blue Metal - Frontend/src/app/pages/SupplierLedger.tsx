@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Calendar, Loader2 } from 'lucide-react';
+import { Calendar, Loader2, Download, Printer } from 'lucide-react';
 import { purchaseBillApi, type PurchaseBillRow } from '../services/operationsApi';
 import { suppliersApi, describeError, type SupplierRow } from '../services/mastersApi';
 import { SearchableDropdown, type SearchableDropdownOption } from '../components/ui/searchable-dropdown';
+import { downloadReportCSV, printReport, inr, fmtDateISO, isNumericHeader, type ReportColumn, currentMonthStart, currentMonthEnd } from '../utils/reportExport';
 
 const fmt = (n: string | number) => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('en-IN');
 
 export const SupplierLedger = () => {
   const [supplierId, setSupplierId] = useState('');
-  const [dateFrom, setDateFrom] = useState('2026-03-01');
-  const [dateTo, setDateTo] = useState('2026-03-31');
+  const [dateFrom, setDateFrom] = useState(currentMonthStart());
+  const [dateTo, setDateTo] = useState(currentMonthEnd());
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
   const [bills, setBills] = useState<PurchaseBillRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -40,11 +41,41 @@ export const SupplierLedger = () => {
     ...suppliers.map(s => ({ value: s.id, label: s.name, description: s.code })),
   ];
 
+  const columns: ReportColumn<PurchaseBillRow>[] = [
+    { header: 'Date', value: b => fmtDateISO(b.purchaseDateTime) },
+    { header: 'Purchase No', value: b => b.purchaseNo },
+    { header: 'Pass No', value: b => b.passNoSnapshot ?? '' },
+    { header: 'Item', value: b => b.itemNameSnapshot },
+    { header: 'Vehicle', value: b => b.vehicleNoSnapshot },
+    { header: 'Net Wt (T)', value: b => Number(b.netWeight).toFixed(2), align: 'right' },
+    { header: 'Rate', value: b => inr(b.rate), align: 'right' },
+    { header: 'Gross Amt', value: b => inr(b.grossAmount), align: 'right' },
+    { header: 'GST', value: b => inr(b.gstAmount), align: 'right' },
+    { header: 'Payable', value: b => inr(b.grossPayable), align: 'right' },
+    { header: 'Mode', value: b => b.paymentMode },
+  ];
+  const meta = () => ({
+    title: 'Supplier Ledger',
+    subtitle: [
+      selectedSupplier ? `Supplier: ${selectedSupplier.name} (${selectedSupplier.code})` : '',
+      `From ${fmtDateISO(dateFrom)} to ${fmtDateISO(dateTo)}`,
+    ].filter(Boolean) as string[],
+    totals: ['', '', '', '', '', '', '', '', 'TOTAL', inr(totalCredit), ''],
+  });
+  const handleDownload = () => downloadReportCSV(bills, columns, meta());
+  const handlePrint = () => printReport(bills, columns, meta());
+
   return (
     <div className="p-6">
-      <div className="mb-4 pb-3 border-b border-gray-300">
-        <h1 className="text-xl font-bold text-gray-900">Supplier Ledger</h1>
-        <p className="text-sm text-gray-500">Purchase bills ledger by supplier from DB</p>
+      <div className="mb-4 pb-3 border-b border-gray-300 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Supplier Ledger</h1>
+          <p className="text-sm text-gray-500">Purchase bills ledger by supplier from DB</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleDownload} disabled={!bills.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
+          <button onClick={handlePrint} disabled={!bills.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
+        </div>
       </div>
       <div className="bg-white rounded-lg border border-gray-300 p-4 mb-4">
         <div className="grid grid-cols-4 gap-3">
@@ -81,7 +112,7 @@ export const SupplierLedger = () => {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-300">
-                  <tr>{['Date','Purchase No','Pass No','Item','Vehicle','Net Wt (T)','Rate','Gross Amt','GST','Payable','Mode'].map(h=><th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-600 whitespace-nowrap">{h}</th>)}</tr>
+                  <tr>{['Date','Purchase No','Pass No','Item','Vehicle','Net Wt (T)','Rate','Gross Amt','GST','Payable','Mode'].map(h=>{ const r = isNumericHeader(h); return <th key={h} className={`px-3 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap ${r?'text-right':'text-left'}`}>{h}</th>; })}</tr>
                 </thead>
                 <tbody>
                   {bills.length === 0 ? <tr><td colSpan={11} className="px-3 py-8 text-center text-gray-400">No bills found</td></tr>

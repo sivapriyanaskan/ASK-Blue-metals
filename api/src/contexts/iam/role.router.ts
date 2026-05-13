@@ -4,7 +4,7 @@ import { asyncHandler, validate } from '../../infra/validation.js';
 import { Errors } from '../../infra/errors.js';
 import { prisma } from '../../infra/db.js';
 import { requireAuth, requirePermissions } from './auth.middleware.js';
-import { Permissions } from './permissions.js';
+import { Permissions, SUPER_ADMIN_ONLY_ROLES, actorIsSuperAdmin } from './permissions.js';
 import { auditService } from '../audit/audit.service.js';
 import { actorContextFromRequest } from '../masters/_common.js';
 
@@ -49,8 +49,10 @@ const serialize = (r: {
 router.get(
   '/',
   requirePermissions(Permissions.ROLE_VIEW),
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const isSA = actorIsSuperAdmin(req.user?.roles);
     const roles = await prisma.role.findMany({
+      where: isSA ? {} : { code: { notIn: SUPER_ADMIN_ONLY_ROLES } },
       orderBy: { code: 'asc' },
       include: { permissions: { include: { permission: true } } },
     });
@@ -80,6 +82,9 @@ router.get(
       include: { permissions: { include: { permission: true } } },
     });
     if (!role) throw Errors.notFound(`Role ${id}`);
+    if (SUPER_ADMIN_ONLY_ROLES.includes(role.code) && !actorIsSuperAdmin(req.user?.roles)) {
+      throw Errors.notFound(`Role ${id}`);
+    }
     res.json(serialize(role));
   }),
 );
@@ -147,6 +152,9 @@ router.patch(
       include: { permissions: { include: { permission: true } } },
     });
     if (!before) throw Errors.notFound(`Role ${id}`);
+    if (SUPER_ADMIN_ONLY_ROLES.includes(before.code) && !actorIsSuperAdmin(req.user?.roles)) {
+      throw Errors.forbidden('Only a Super Admin can modify this role');
+    }
 
     const role = await prisma.$transaction(async (tx) => {
       await tx.role.update({
@@ -209,6 +217,9 @@ router.delete(
     const ctx = actorContextFromRequest(req);
     const role = await prisma.role.findUnique({ where: { id } });
     if (!role) throw Errors.notFound(`Role ${id}`);
+    if (SUPER_ADMIN_ONLY_ROLES.includes(role.code) && !actorIsSuperAdmin(req.user?.roles)) {
+      throw Errors.forbidden('Only a Super Admin can delete this role');
+    }
     if (role.isSystem) throw Errors.conflict('System roles cannot be deleted');
 
     const inUse = await prisma.userRole.count({ where: { roleId: id } });

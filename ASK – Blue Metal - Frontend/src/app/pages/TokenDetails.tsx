@@ -24,7 +24,7 @@ const fmtWeight = (s: string | number) =>
 const API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   'http://localhost:4000/api/v1';
-const API_ORIGIN = new URL(API_BASE).origin;
+const API_ORIGIN = new URL(API_BASE, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin;
 
 /**
  * Resolve a stored image reference for display. Relative `/uploads/...`

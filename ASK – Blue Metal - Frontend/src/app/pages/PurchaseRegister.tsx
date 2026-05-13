@@ -3,13 +3,14 @@ import { Search, Calendar, Download, Printer, Loader2 } from 'lucide-react';
 import { purchaseBillApi, type PurchaseBillRow } from '../services/operationsApi';
 import { suppliersApi, itemsApi, describeError, type SupplierRow, type ItemRow } from '../services/mastersApi';
 import { SearchableDropdown, type SearchableDropdownOption } from '../components/ui/searchable-dropdown';
+import { downloadReportCSV, printReport, inr, fmtDateISO, isNumericHeader, type ReportColumn, currentMonthStart, currentMonthEnd } from '../utils/reportExport';
 
 const fmt = (n: string | number) => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('en-IN');
 
 export const PurchaseRegister = () => {
-  const [dateFrom, setDateFrom] = useState('2026-03-01');
-  const [dateTo, setDateTo] = useState('2026-03-31');
+  const [dateFrom, setDateFrom] = useState(currentMonthStart());
+  const [dateTo, setDateTo] = useState(currentMonthEnd());
   const [supplierId, setSupplierId] = useState('');
   const [itemId, setItemId] = useState('');
   const [search, setSearch] = useState('');
@@ -52,13 +53,39 @@ export const PurchaseRegister = () => {
   const supOpts: SearchableDropdownOption[] = [{ value: '', label: 'All Suppliers' }, ...suppliers.map(s => ({ value: s.id, label: s.name }))];
   const itemOpts: SearchableDropdownOption[] = [{ value: '', label: 'All Items' }, ...items.filter(i => i.isRawMaterial).map(i => ({ value: i.id, label: i.name }))];
 
+  const columns: ReportColumn<PurchaseBillRow>[] = [
+    { header: 'Purchase No', value: b => b.purchaseNo },
+    { header: 'Date', value: b => fmtDateISO(b.purchaseDateTime) },
+    { header: 'Pass No', value: b => b.passNoSnapshot ?? '' },
+    { header: 'Supplier', value: b => b.supplierNameSnapshot },
+    { header: 'Item', value: b => b.itemNameSnapshot },
+    { header: 'Vehicle', value: b => b.vehicleNoSnapshot },
+    { header: 'Net Wt (T)', value: b => Number(b.netWeight).toFixed(2), align: 'right' },
+    { header: 'Rate', value: b => inr(b.rate), align: 'right' },
+    { header: 'Base Amt', value: b => inr(b.grossAmount), align: 'right' },
+    { header: 'GST', value: b => inr(b.gstAmount), align: 'right' },
+    { header: 'Payable', value: b => inr(b.grossPayable), align: 'right' },
+    { header: 'Mode', value: b => b.paymentMode },
+  ];
+  const meta = () => ({
+    title: 'Purchase Register',
+    subtitle: [
+      `From ${fmtDateISO(dateFrom)} to ${fmtDateISO(dateTo)}`,
+      supplierId ? `Supplier: ${suppliers.find(s => s.id === supplierId)?.name ?? ''}` : 'All Suppliers',
+      itemId ? `Item: ${items.find(i => i.id === itemId)?.name ?? ''}` : 'All Items',
+    ],
+    totals: ['', '', '', '', '', 'TOTALS', totals.net.toFixed(2), '', inr(totals.gross), inr(totals.gst), inr(totals.payable), ''],
+  });
+  const handleDownload = () => downloadReportCSV(filtered, columns, meta());
+  const handlePrint = () => printReport(filtered, columns, meta());
+
   return (
     <div className="p-6">
       <div className="mb-4 pb-3 border-b border-gray-300 flex items-center justify-between">
         <h1 className="text-xl font-bold text-gray-900">Purchase Register</h1>
         <div className="flex gap-2">
-          <button className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
-          <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
+          <button onClick={handleDownload} disabled={!filtered.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
+          <button onClick={handlePrint} disabled={!filtered.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
         </div>
       </div>
 
@@ -103,9 +130,9 @@ export const PurchaseRegister = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-300">
-                <tr>{['Purchase No', 'Date', 'Pass No', 'Supplier', 'Item', 'Vehicle', 'Net Wt (T)', 'Rate', 'Base Amt', 'GST', 'Payable', 'Mode'].map(h => (
-                  <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-600 whitespace-nowrap">{h}</th>
-                ))}</tr>
+                <tr>{['Purchase No', 'Date', 'Pass No', 'Supplier', 'Item', 'Vehicle', 'Net Wt (T)', 'Rate', 'Base Amt', 'GST', 'Payable', 'Mode'].map(h => { const r = isNumericHeader(h); return (
+                  <th key={h} className={`px-3 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap ${r?'text-right':'text-left'}`}>{h}</th>
+                ); })}</tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (

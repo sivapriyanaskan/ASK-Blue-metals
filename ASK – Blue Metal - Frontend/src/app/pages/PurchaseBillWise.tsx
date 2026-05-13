@@ -1,161 +1,151 @@
-import { useState } from 'react';
-import { Search, Download, Calendar, Printer } from 'lucide-react';
-import { SearchableDropdown } from '../components/ui/searchable-dropdown';
+import { useEffect, useMemo, useState } from 'react';
+import { Search, Download, Calendar, Printer, Loader2 } from 'lucide-react';
+import { SearchableDropdown, type SearchableDropdownOption } from '../components/ui/searchable-dropdown';
+import { purchaseBillApi, type PurchaseBillRow } from '../services/operationsApi';
+import { suppliersApi, describeError, type SupplierRow } from '../services/mastersApi';
+import { downloadReportCSV, printReport, inr, fmtDateISO, isNumericHeader, type ReportColumn, currentMonthStart, currentMonthEnd } from '../utils/reportExport';
 
 export const PurchaseBillWise = () => {
-  const [dateFrom, setDateFrom] = useState('2026-02-01');
-  const [dateTo, setDateTo] = useState('2026-02-28');
-  const [filterSupplier, setFilterSupplier] = useState('All');
+  const [dateFrom, setDateFrom] = useState(currentMonthStart());
+  const [dateTo, setDateTo] = useState(currentMonthEnd());
+  const [supplierId, setSupplierId] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
+  const [bills, setBills] = useState<PurchaseBillRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const purchaseBills = [
-    { billNo: 'PUR/02/001/26', date: '2026-02-05T10:30:00', supplier: 'Quarry Supplies Ltd.', itemName: 'Raw Stone - 20mm', qty: 50.000, rate: 5000, amount: 250000, gst: 12500, total: 262500, paymentMode: 'Credit' },
-    { billNo: 'PUR/02/002/26', date: '2026-02-06T11:15:00', supplier: 'Quarry Supplies Ltd.', itemName: 'Raw Stone - 40mm', qty: 45.000, rate: 4900, amount: 220500, gst: 11025, total: 231525, paymentMode: 'Credit' },
-    { billNo: 'PUR/02/003/26', date: '2026-02-08T09:45:00', supplier: 'Stone Masters', itemName: 'Raw Stone - 10mm', qty: 40.000, rate: 5100, amount: 204000, gst: 10200, total: 214200, paymentMode: 'Cash' },
-    { billNo: 'PUR/02/005/26', date: '2026-02-12T14:20:00', supplier: 'Stone Masters', itemName: 'Raw Stone - 20mm', qty: 48.500, rate: 5100, amount: 247350, gst: 12367.50, total: 259717.50, paymentMode: 'Credit' },
-    { billNo: 'PUR/02/007/26', date: '2026-02-14T08:30:00', supplier: 'Rock Aggregates Pvt Ltd', itemName: 'Raw Stone - 40mm', qty: 48.200, rate: 4880, amount: 235216, gst: 11760.80, total: 246976.80, paymentMode: 'Cash' },
-    { billNo: 'PUR/02/010/26', date: '2026-02-18T10:00:00', supplier: 'Quarry Supplies Ltd.', itemName: 'Raw Stone - 20mm', qty: 52.000, rate: 4950, amount: 257400, gst: 12870, total: 270270, paymentMode: 'Credit' },
-    { billNo: 'PUR/02/011/26', date: '2026-02-16T13:45:00', supplier: 'Rock Aggregates Pvt Ltd', itemName: 'Raw Stone - 10mm', qty: 38.750, rate: 5050, amount: 195687.50, gst: 9784.38, total: 205471.88, paymentMode: 'Cash' },
-    { billNo: 'PUR/02/013/26', date: '2026-02-20T11:30:00', supplier: 'Stone Masters', itemName: 'Raw Stone - 40mm', qty: 42.000, rate: 4920, amount: 206640, gst: 10332, total: 216972, paymentMode: 'Credit' }
+  useEffect(() => { suppliersApi.list({ pageSize: 200 }).then(r => setSuppliers(r.items)).catch(() => {}); }, []);
+
+  const load = async () => {
+    setLoading(true); setError(null);
+    try {
+      const res = await purchaseBillApi.list({ dateFrom, dateTo, supplierId: supplierId || undefined, pageSize: 200 });
+      setBills(res.items);
+    } catch (e) { setError(describeError(e, 'Failed to load')); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, [dateFrom, dateTo, supplierId]);
+
+  const filtered = useMemo(() => bills.filter(b => {
+    const s = searchTerm.toLowerCase();
+    return !s || b.purchaseNo.toLowerCase().includes(s) || b.supplierNameSnapshot.toLowerCase().includes(s) || b.itemNameSnapshot.toLowerCase().includes(s) || b.vehicleNoSnapshot.toLowerCase().includes(s);
+  }), [bills, searchTerm]);
+
+  const totals = useMemo(() => filtered.reduce((a, b) => ({
+    qty: a.qty + Number(b.netWeight),
+    base: a.base + Number(b.grossAmount),
+    gst: a.gst + Number(b.gstAmount),
+    total: a.total + Number(b.grossPayable),
+  }), { qty: 0, base: 0, gst: 0, total: 0 }), [filtered]);
+
+  const supOpts: SearchableDropdownOption[] = [{ value: '', label: 'All Suppliers' }, ...suppliers.map(s => ({ value: s.id, label: s.name }))];
+
+  const columns: ReportColumn<PurchaseBillRow>[] = [
+    { header: 'Bill No', value: b => b.purchaseNo },
+    { header: 'Date', value: b => fmtDateISO(b.purchaseDateTime) },
+    { header: 'Supplier', value: b => b.supplierNameSnapshot },
+    { header: 'Item', value: b => b.itemNameSnapshot },
+    { header: 'Vehicle', value: b => b.vehicleNoSnapshot },
+    { header: 'Qty (T)', value: b => Number(b.netWeight).toFixed(3), align: 'right' },
+    { header: 'Rate', value: b => inr(b.rate), align: 'right' },
+    { header: 'Base Amt', value: b => inr(b.grossAmount), align: 'right' },
+    { header: 'GST', value: b => inr(b.gstAmount), align: 'right' },
+    { header: 'Total', value: b => inr(b.grossPayable), align: 'right' },
+    { header: 'Mode', value: b => b.paymentMode },
   ];
-
-  const filteredData = purchaseBills.filter(bill => {
-    const matchesSearch = 
-      bill.billNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      bill.supplier.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      bill.itemName.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesSupplier = filterSupplier === 'All' || bill.supplier === filterSupplier;
-    
-    return matchesSearch && matchesSupplier;
+  const meta = () => ({
+    title: 'Purchase Bill Wise',
+    subtitle: [
+      `From ${fmtDateISO(dateFrom)} to ${fmtDateISO(dateTo)}`,
+      supplierId ? `Supplier: ${suppliers.find(s => s.id === supplierId)?.name ?? ''}` : 'All Suppliers',
+      searchTerm ? `Search: ${searchTerm}` : '',
+    ].filter(Boolean) as string[],
+    totals: ['', '', '', '', 'TOTALS', totals.qty.toFixed(3), '', inr(totals.base), inr(totals.gst), inr(totals.total), ''],
   });
-
-  const totals = filteredData.reduce((acc, bill) => ({
-    quantity: acc.quantity + bill.qty,
-    amount: acc.amount + bill.amount,
-    gst: acc.gst + bill.gst,
-    total: acc.total + bill.total
-  }), { quantity: 0, amount: 0, gst: 0, total: 0 });
+  const handleDownload = () => downloadReportCSV(filtered, columns, meta());
+  const handlePrint = () => printReport(filtered, columns, meta());
 
   return (
     <div className="p-6">
-      <div className="mb-4 pb-3 border-b border-gray-300">
+      <div className="mb-4 pb-3 border-b border-gray-300 flex items-center justify-between">
         <h1 className="text-xl font-bold text-gray-900">Purchase Bill Wise</h1>
-      </div>
-
-      <div className="bg-white rounded-lg border border-gray-300 p-4 mb-6">
-        <div className="grid grid-cols-5 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">From Date</label>
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">To Date</label>
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
-            <SearchableDropdown
-              options={[
-                { value: 'All', label: 'All' },
-                { value: 'Quarry Supplies Ltd.', label: 'Quarry Supplies Ltd.' },
-                { value: 'Stone Masters', label: 'Stone Masters' },
-                { value: 'Rock Aggregates Pvt Ltd', label: 'Rock Aggregates Pvt Ltd' },
-              ]}
-              value={filterSupplier} onChange={setFilterSupplier} placeholder="Select Supplier" searchPlaceholder="Search suppliers..." />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Bill No, Supplier, Item..." className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-            </div>
-          </div>
-          <div className="flex items-end gap-2">
-            <button className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors">
-              <Download className="w-4 h-4" /> Excel
-            </button>
-            <button className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors">
-              <Printer className="w-4 h-4" /> Print
-            </button>
-          </div>
+        <div className="flex gap-2">
+          <button onClick={handleDownload} disabled={!filtered.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
+          <button onClick={handlePrint} disabled={!filtered.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="text-sm text-gray-600 mb-1">Total Bills</div>
-          <div className="text-2xl font-bold text-gray-900">{filteredData.length}</div>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="text-sm text-gray-600 mb-1">Total Quantity</div>
-          <div className="text-2xl font-bold text-gray-900">{totals.quantity.toFixed(2)} T</div>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="text-sm text-gray-600 mb-1">Total GST</div>
-          <div className="text-2xl font-bold text-orange-600">₹{totals.gst.toLocaleString()}</div>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="text-sm text-gray-600 mb-1">Grand Total</div>
-          <div className="text-2xl font-bold text-green-600">₹{totals.total.toLocaleString()}</div>
+      <div className="bg-white rounded-lg border border-gray-300 p-4 mb-4">
+        <div className="grid grid-cols-5 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">From Date</label>
+            <div className="relative"><Calendar className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 rounded" /></div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">To Date</label>
+            <div className="relative"><Calendar className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 rounded" /></div>
+          </div>
+          <div><label className="block text-xs font-medium text-gray-600 mb-1">Supplier</label>
+            <SearchableDropdown options={supOpts} value={supplierId} onValueChange={setSupplierId} placeholder="All Suppliers" /></div>
+          <div><label className="block text-xs font-medium text-gray-600 mb-1">Search</label>
+            <div className="relative"><Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Bill No, Supplier, Item…" className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 rounded" /></div>
+          </div>
+          <div className="flex items-end"><button onClick={load} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-sm">Apply</button></div>
         </div>
       </div>
+
+      <div className="grid grid-cols-4 gap-4 mb-4">
+        {([['Total Bills', String(filtered.length)], ['Quantity', totals.qty.toFixed(3) + ' T'], ['Base Amount', '₹' + inr(totals.base)], ['Total Payable', '₹' + inr(totals.total)]] as [string, string][]).map(([l, v]) => (
+          <div key={l} className="bg-white rounded-lg border border-gray-300 p-3"><div className="text-xs text-gray-500">{l}</div><div className="text-xl font-bold text-gray-900">{v}</div></div>
+        ))}
+      </div>
+
+      {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">{error}</div>}
 
       <div className="bg-white rounded-lg border border-gray-300 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-300">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Date</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Bill No</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Supplier</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Item</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Qty (T)</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Rate</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Amount</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase">GST</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Total</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Payment</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {filteredData.map((bill) => (
-                <tr key={bill.billNo} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm text-gray-900">{new Date(bill.date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' })}</td>
-                  <td className="px-4 py-3 text-sm font-mono font-medium text-blue-600">{bill.billNo}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900">{bill.supplier}</td>
-                  <td className="px-4 py-3 text-sm text-gray-900">{bill.itemName}</td>
-                  <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">{bill.qty.toFixed(3)}</td>
-                  <td className="px-4 py-3 text-sm text-right text-gray-900">₹{bill.rate}</td>
-                  <td className="px-4 py-3 text-sm text-right text-gray-900">₹{bill.amount.toFixed(2)}</td>
-                  <td className="px-4 py-3 text-sm text-right text-gray-900">₹{bill.gst.toFixed(2)}</td>
-                  <td className="px-4 py-3 text-sm text-right font-medium text-green-600">₹{bill.total.toFixed(2)}</td>
-                  <td className="px-4 py-3 text-sm">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${bill.paymentMode === 'Cash' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{bill.paymentMode}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot className="bg-gray-900 text-white font-bold">
-              <tr>
-                <td colSpan={4} className="px-4 py-3 text-sm text-right">TOTAL:</td>
-                <td className="px-4 py-3 text-sm text-right">{totals.quantity.toFixed(3)}</td>
-                <td className="px-4 py-3"></td>
-                <td className="px-4 py-3 text-sm text-right">₹{totals.amount.toFixed(2)}</td>
-                <td className="px-4 py-3 text-sm text-right">₹{totals.gst.toFixed(2)}</td>
-                <td className="px-4 py-3 text-sm text-right">₹{totals.total.toFixed(2)}</td>
-                <td className="px-4 py-3"></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-        {filteredData.length === 0 && (<div className="p-8 text-center text-gray-500">No purchase bills found for the selected criteria</div>)}
+        {loading ? <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-blue-500 mr-2" /><span>Loading...</span></div> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-300">
+                <tr>{['Bill No', 'Date', 'Supplier', 'Item', 'Vehicle', 'Qty (T)', 'Rate', 'Base Amt', 'GST', 'Total', 'Mode'].map(h => { const r = isNumericHeader(h); return <th key={h} className={`px-3 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap ${r?'text-right':'text-left'}`}>{h}</th>; })}</tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 ? <tr><td colSpan={11} className="px-3 py-8 text-center text-gray-400">No records found</td></tr> : filtered.map(b => (
+                  <tr key={b.id} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-3 py-2 font-medium text-blue-600">{b.purchaseNo}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{fmtDateISO(b.purchaseDateTime)}</td>
+                    <td className="px-3 py-2 max-w-32 truncate">{b.supplierNameSnapshot}</td>
+                    <td className="px-3 py-2 max-w-28 truncate">{b.itemNameSnapshot}</td>
+                    <td className="px-3 py-2">{b.vehicleNoSnapshot}</td>
+                    <td className="px-3 py-2 text-right">{Number(b.netWeight).toFixed(3)}</td>
+                    <td className="px-3 py-2 text-right">₹{inr(b.rate)}</td>
+                    <td className="px-3 py-2 text-right">₹{inr(b.grossAmount)}</td>
+                    <td className="px-3 py-2 text-right">₹{inr(b.gstAmount)}</td>
+                    <td className="px-3 py-2 text-right font-semibold">₹{inr(b.grossPayable)}</td>
+                    <td className="px-3 py-2">{b.paymentMode}</td>
+                  </tr>
+                ))}
+              </tbody>
+              {filtered.length > 0 && (
+                <tfoot className="bg-gray-50 border-t-2 border-gray-300 font-semibold">
+                  <tr>
+                    <td colSpan={5} className="px-3 py-2 text-right text-xs text-gray-600">TOTALS</td>
+                    <td className="px-3 py-2 text-right">{totals.qty.toFixed(3)}</td>
+                    <td></td>
+                    <td className="px-3 py-2 text-right">₹{inr(totals.base)}</td>
+                    <td className="px-3 py-2 text-right">₹{inr(totals.gst)}</td>
+                    <td className="px-3 py-2 text-right">₹{inr(totals.total)}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

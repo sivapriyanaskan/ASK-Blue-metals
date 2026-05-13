@@ -68,6 +68,8 @@ const FromToken = z.object({
   onlineAmount: z.coerce.number().min(0).default(0),
   // #23: credit may be negative to represent a debit adjustment.
   creditAmount: z.coerce.number().default(0),
+  // Driver bata (allowance) paid to driver — captured at billing time.
+  driverBata: z.coerce.number().min(0).default(0),
   denominations: z.array(DenomRow).default([]),
   paymentDeferralOption: z.enum(['PAY_NOW', 'PAY_NEXT_BILL']).optional(),
   remainingBalance: z.coerce.number().min(0).optional(),
@@ -104,6 +106,7 @@ const billInclude = {
       anprImageRef: true,
       anprNumberPlateText: true,
       loadImageRef: true,
+      customer: { select: { id: true, name: true } },
     },
   },
 } as const;
@@ -148,7 +151,20 @@ router.get(
       }),
       prisma.salesBill.count({ where }),
     ]);
-    res.json({ items, page: q.page, pageSize: q.pageSize, total });
+    // Side-fetch creator names so the reports can show a "Created By" column
+    // without adding a User relation to SalesBill.
+    const creatorIds = Array.from(new Set(items.map(b => b.createdById).filter(Boolean) as string[]));
+    const creators = creatorIds.length
+      ? await prisma.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, firstName: true, lastName: true, username: true } })
+      : [];
+    const creatorMap = new Map(
+      creators.map(u => {
+        const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.username;
+        return [u.id, name] as const;
+      }),
+    );
+    const enriched = items.map(b => ({ ...b, createdByName: creatorMap.get(b.createdById) ?? null }));
+    res.json({ items: enriched, page: q.page, pageSize: q.pageSize, total });
   }),
 );
 
@@ -418,6 +434,7 @@ router.post(
           cashAmount: normCash,
           onlineAmount: normOnline,
           creditAmount: normCredit,
+          driverBata: D(body.driverBata ?? 0),
           denominations: (body.denominations ?? []) as unknown as Prisma.InputJsonValue,
           paymentDeferralOption,
           remainingBalance: remainingForBill,

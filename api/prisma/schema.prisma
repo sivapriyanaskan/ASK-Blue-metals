@@ -605,6 +605,8 @@ model SalesBill {
   vehicleNo             String
   driverName            String?
   driverMobile          String?
+  // Driver bata (allowance) amount paid to driver — captured at billing time.
+  driverBata            Decimal         @default(0) @db.Decimal(10, 2)
   itemId                String
   // Weighbridge: empty (from token), gross (from sales bill), net = gross - empty
   emptyWeight           Decimal         @db.Decimal(10, 3)
@@ -750,6 +752,8 @@ model PurchaseBill {
   gstPercent           Decimal            @default(0) @db.Decimal(5, 2)
   gstAmount            Decimal            @default(0) @db.Decimal(18, 2)
   grossPayable         Decimal            @db.Decimal(18, 2)
+  // Driver bata (allowance) paid in cash at the time of the purchase weighment.
+  driverBata           Decimal            @default(0) @db.Decimal(10, 2)
   confirmationReason   String?
   paymentMode          PaymentMode        @default(CREDIT)
   // Camera snapshots captured at the weighbridge.

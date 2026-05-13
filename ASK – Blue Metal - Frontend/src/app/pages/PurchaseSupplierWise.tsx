@@ -1,237 +1,177 @@
-import { useState } from 'react';
-import { Search, Download, Calendar, Printer, ChevronDown, ChevronRight } from 'lucide-react';
-import { SearchableDropdown } from '../components/ui/searchable-dropdown';
+import { useEffect, useMemo, useState } from 'react';
+import { Search, Download, Calendar, Printer, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { SearchableDropdown, type SearchableDropdownOption } from '../components/ui/searchable-dropdown';
+import { purchaseBillApi, type PurchaseBillRow } from '../services/operationsApi';
+import { suppliersApi, describeError, type SupplierRow } from '../services/mastersApi';
+import { downloadReportCSV, printReport, inr, fmtDateISO, isNumericHeader, type ReportColumn, currentMonthStart, currentMonthEnd } from '../utils/reportExport';
+
+interface SupplierGroup {
+  supplierId: string;
+  supplierCode: string;
+  supplierName: string;
+  bills: PurchaseBillRow[];
+  totalQty: number;
+  totalAmount: number;
+}
 
 export const PurchaseSupplierWise = () => {
-  const [dateFrom, setDateFrom] = useState('2026-02-01');
-  const [dateTo, setDateTo] = useState('2026-02-28');
-  const [filterSupplier, setFilterSupplier] = useState('All');
+  const [dateFrom, setDateFrom] = useState(currentMonthStart());
+  const [dateTo, setDateTo] = useState(currentMonthEnd());
+  const [supplierId, setSupplierId] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [expandedSuppliers, setExpandedSuppliers] = useState<Set<string>>(new Set());
+  const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
+  const [bills, setBills] = useState<PurchaseBillRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const supplierPurchases = [
-    {
-      supplierCode: 'SUP001',
-      supplierName: 'Quarry Supplies Ltd.',
-      totalPurchases: 6,
-      totalQuantity: 287.000,
-      totalAmount: 1418420.00,
-      purchases: [
-        { billNo: 'PUR/02/001/26', date: '2026-02-05', itemName: 'Raw Stone - 20mm', qty: 50.000, rate: 5000, amount: 250000 },
-        { billNo: 'PUR/02/002/26', date: '2026-02-06', itemName: 'Raw Stone - 40mm', qty: 45.000, rate: 4900, amount: 220500 },
-        { billNo: 'PUR/02/010/26', date: '2026-02-18', itemName: 'Raw Stone - 20mm', qty: 52.000, rate: 4950, amount: 257400 },
-        { billNo: 'PUR/02/019/26', date: '2026-02-25', itemName: 'Raw Stone - 40mm', qty: 45.000, rate: 4896, amount: 220320 },
-        { billNo: 'PUR/02/020/26', date: '2026-02-26', itemName: 'Raw Stone - 20mm', qty: 50.000, rate: 4900, amount: 245000 },
-        { billNo: 'PUR/02/021/26', date: '2026-02-28', itemName: 'Raw Stone - 10mm', qty: 45.000, rate: 5050, amount: 227250 }
-      ]
-    },
-    {
-      supplierCode: 'SUP002',
-      supplierName: 'Stone Masters',
-      totalPurchases: 4,
-      totalQuantity: 178.500,
-      totalAmount: 907164.00,
-      purchases: [
-        { billNo: 'PUR/02/003/26', date: '2026-02-08', itemName: 'Raw Stone - 10mm', qty: 40.000, rate: 5100, amount: 204000 },
-        { billNo: 'PUR/02/005/26', date: '2026-02-12', itemName: 'Raw Stone - 20mm', qty: 48.500, rate: 5100, amount: 247350 },
-        { billNo: 'PUR/02/013/26', date: '2026-02-20', itemName: 'Raw Stone - 40mm', qty: 42.000, rate: 4920, amount: 206640 },
-        { billNo: 'PUR/02/018/26', date: '2026-02-24', itemName: 'Raw Stone - 10mm', qty: 48.000, rate: 5186, amount: 248928 }
-      ]
-    },
-    {
-      supplierCode: 'SUP003',
-      supplierName: 'Rock Aggregates Pvt Ltd',
-      totalPurchases: 3,
-      totalQuantity: 131.950,
-      totalAmount: 658153.50,
-      purchases: [
-        { billNo: 'PUR/02/007/26', date: '2026-02-14', itemName: 'Raw Stone - 40mm', qty: 48.200, rate: 4880, amount: 235216 },
-        { billNo: 'PUR/02/011/26', date: '2026-02-16', itemName: 'Raw Stone - 10mm', qty: 38.750, rate: 5050, amount: 195687.50 },
-        { billNo: 'PUR/02/015/26', date: '2026-02-22', itemName: 'Raw Stone - 20mm', qty: 45.000, rate: 5050, amount: 227250 }
-      ]
-    }
-  ];
+  useEffect(() => { suppliersApi.list({ pageSize: 200 }).then(r => setSuppliers(r.items)).catch(() => {}); }, []);
 
-  const filteredData = supplierPurchases.filter(supplier => {
-    const matchesSearch = 
-      supplier.supplierName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      supplier.supplierCode.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesSupplier = filterSupplier === 'All' || supplier.supplierName === filterSupplier;
-    
-    return matchesSearch && matchesSupplier;
-  });
-
-  const totals = filteredData.reduce((acc, supplier) => ({
-    purchases: acc.purchases + supplier.totalPurchases,
-    quantity: acc.quantity + supplier.totalQuantity,
-    amount: acc.amount + supplier.totalAmount
-  }), { purchases: 0, quantity: 0, amount: 0 });
-
-  const toggleSupplier = (supplierCode: string) => {
-    const newExpanded = new Set(expandedSuppliers);
-    if (newExpanded.has(supplierCode)) {
-      newExpanded.delete(supplierCode);
-    } else {
-      newExpanded.add(supplierCode);
-    }
-    setExpandedSuppliers(newExpanded);
+  const load = async () => {
+    setLoading(true); setError(null);
+    try {
+      const res = await purchaseBillApi.list({ dateFrom, dateTo, supplierId: supplierId || undefined, pageSize: 200 });
+      setBills(res.items);
+    } catch (e) { setError(describeError(e, 'Failed to load purchase data')); }
+    finally { setLoading(false); }
   };
+  useEffect(() => { void load(); }, [dateFrom, dateTo, supplierId]);
+
+  const groups = useMemo((): SupplierGroup[] => {
+    const map: Record<string, SupplierGroup> = {};
+    for (const b of bills) {
+      const s = searchTerm.toLowerCase();
+      if (s && !b.supplierNameSnapshot.toLowerCase().includes(s) && !(b.supplier?.code ?? '').toLowerCase().includes(s)) continue;
+      if (!map[b.supplierId]) {
+        map[b.supplierId] = { supplierId: b.supplierId, supplierCode: b.supplier?.code ?? '—', supplierName: b.supplierNameSnapshot, bills: [], totalQty: 0, totalAmount: 0 };
+      }
+      const g = map[b.supplierId];
+      g.bills.push(b);
+      g.totalQty += Number(b.netWeight);
+      g.totalAmount += Number(b.grossPayable);
+    }
+    return Object.values(map).sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [bills, searchTerm]);
+
+  const totals = useMemo(() => groups.reduce((a, g) => ({
+    bills: a.bills + g.bills.length, qty: a.qty + g.totalQty, amount: a.amount + g.totalAmount,
+  }), { bills: 0, qty: 0, amount: 0 }), [groups]);
+
+  const supOpts: SearchableDropdownOption[] = [{ value: '', label: 'All Suppliers' }, ...suppliers.map(s => ({ value: s.id, label: s.name }))];
+
+  type Row = { isHeader: boolean; g: SupplierGroup; b?: PurchaseBillRow };
+  const exportRows: Row[] = useMemo(() => {
+    const out: Row[] = [];
+    for (const g of groups) {
+      out.push({ isHeader: true, g });
+      for (const b of g.bills) out.push({ isHeader: false, g, b });
+    }
+    return out;
+  }, [groups]);
+  const columns: ReportColumn<Row>[] = [
+    { header: 'Supplier', value: r => r.isHeader ? `${r.g.supplierCode} — ${r.g.supplierName}` : `  ${r.b?.purchaseNo ?? ''} — ${r.b ? fmtDateISO(r.b.purchaseDateTime) : ''} — ${r.b?.itemNameSnapshot ?? ''}` },
+    { header: 'Bills', value: r => r.isHeader ? r.g.bills.length : '', align: 'right' },
+    { header: 'Qty (T)', value: r => r.isHeader ? r.g.totalQty.toFixed(3) : (r.b ? Number(r.b.netWeight).toFixed(3) : ''), align: 'right' },
+    { header: 'Rate', value: r => r.b ? inr(r.b.rate) : '', align: 'right' },
+    { header: 'Amount', value: r => r.isHeader ? inr(r.g.totalAmount) : (r.b ? inr(r.b.grossPayable) : ''), align: 'right' },
+  ];
+  const meta = () => ({
+    title: 'Purchase Supplier Wise',
+    subtitle: [
+      `From ${fmtDateISO(dateFrom)} to ${fmtDateISO(dateTo)}`,
+      supplierId ? `Supplier: ${suppliers.find(s => s.id === supplierId)?.name ?? ''}` : 'All Suppliers',
+      searchTerm ? `Search: ${searchTerm}` : '',
+    ].filter(Boolean) as string[],
+    totals: [`GRAND TOTAL (${groups.length} suppliers)`, totals.bills, totals.qty.toFixed(3), '', inr(totals.amount)],
+  });
+  const handleDownload = () => downloadReportCSV(exportRows, columns, meta());
+  const handlePrint = () => printReport(exportRows, columns, meta());
+
+  const toggle = (id: string) => setExpanded(e => { const n = new Set(e); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   return (
     <div className="p-6">
-      <div className="mb-4 pb-3 border-b border-gray-300">
+      <div className="mb-4 pb-3 border-b border-gray-300 flex items-center justify-between">
         <h1 className="text-xl font-bold text-gray-900">Purchase Supplier Wise</h1>
-      </div>
-
-      {/* Filters */}
-      <div className="bg-white rounded-lg border border-gray-300 p-4 mb-6">
-        <div className="grid grid-cols-5 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">From Date</label>
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">To Date</label>
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
-            <SearchableDropdown
-              options={[
-                { value: 'All', label: 'All' },
-                { value: 'Quarry Supplies Ltd.', label: 'Quarry Supplies Ltd.' },
-                { value: 'Stone Masters', label: 'Stone Masters' },
-                { value: 'Rock Aggregates Pvt Ltd', label: 'Rock Aggregates Pvt Ltd' },
-              ]}
-              value={filterSupplier}
-              onChange={setFilterSupplier}
-              placeholder="Select Supplier"
-              searchPlaceholder="Search suppliers..."
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Supplier name or code..."
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-
-          <div className="flex items-end gap-2">
-            <button className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors">
-              <Download className="w-4 h-4" />
-              Excel
-            </button>
-            <button className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors">
-              <Printer className="w-4 h-4" />
-              Print
-            </button>
-          </div>
+        <div className="flex gap-2">
+          <button onClick={handleDownload} disabled={!groups.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
+          <button onClick={handlePrint} disabled={!groups.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="text-sm text-gray-600 mb-1">Total Suppliers</div>
-          <div className="text-2xl font-bold text-gray-900">{filteredData.length}</div>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="text-sm text-gray-600 mb-1">Total Purchases</div>
-          <div className="text-2xl font-bold text-gray-900">{totals.purchases}</div>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="text-sm text-gray-600 mb-1">Total Quantity</div>
-          <div className="text-2xl font-bold text-gray-900">{totals.quantity.toFixed(2)} T</div>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-300 p-4">
-          <div className="text-sm text-gray-600 mb-1">Total Amount</div>
-          <div className="text-2xl font-bold text-green-600">₹{totals.amount.toLocaleString()}</div>
+      <div className="bg-white rounded-lg border border-gray-300 p-4 mb-4">
+        <div className="grid grid-cols-5 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">From Date</label>
+            <div className="relative"><Calendar className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 rounded" /></div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">To Date</label>
+            <div className="relative"><Calendar className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 rounded" /></div>
+          </div>
+          <div><label className="block text-xs font-medium text-gray-600 mb-1">Supplier</label>
+            <SearchableDropdown options={supOpts} value={supplierId} onValueChange={setSupplierId} placeholder="All Suppliers" /></div>
+          <div><label className="block text-xs font-medium text-gray-600 mb-1">Search</label>
+            <div className="relative"><Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Supplier name or code…" className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 rounded" /></div>
+          </div>
+          <div className="flex items-end"><button onClick={load} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-sm">Apply</button></div>
         </div>
       </div>
 
-      {/* Supplier-wise Table */}
+      <div className="grid grid-cols-4 gap-4 mb-4">
+        {([['Suppliers', String(groups.length)], ['Bills', String(totals.bills)], ['Quantity', totals.qty.toFixed(3) + ' T'], ['Total Amount', '₹' + inr(totals.amount)]] as [string, string][]).map(([l, v]) => (
+          <div key={l} className="bg-white rounded-lg border border-gray-300 p-3"><div className="text-xs text-gray-500">{l}</div><div className="text-xl font-bold text-gray-900">{v}</div></div>
+        ))}
+      </div>
+
+      {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">{error}</div>}
+
       <div className="bg-white rounded-lg border border-gray-300 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-300">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase w-8"></th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Supplier Code</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Supplier Name</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Purchases</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Qty (T)</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Total Amount</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {filteredData.flatMap((supplier) => [
-                <tr key={supplier.supplierCode} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleSupplier(supplier.supplierCode)}>
-                  <td className="px-4 py-3 text-sm">
-                    {expandedSuppliers.has(supplier.supplierCode) ? (
-                      <ChevronDown className="w-4 h-4 text-gray-500" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-gray-500" />
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm font-mono text-gray-900">{supplier.supplierCode}</td>
-                  <td className="px-4 py-3 text-sm font-medium text-gray-900">{supplier.supplierName}</td>
-                  <td className="px-4 py-3 text-sm text-right text-gray-900">{supplier.totalPurchases}</td>
-                  <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">{supplier.totalQuantity.toFixed(3)}</td>
-                  <td className="px-4 py-3 text-sm text-right font-medium text-green-600">₹{supplier.totalAmount.toFixed(2)}</td>
-                </tr>,
-                ...(expandedSuppliers.has(supplier.supplierCode) ? supplier.purchases.map((purchase) => (
-                  <tr key={`${supplier.supplierCode}-${purchase.billNo}`} className="bg-blue-50">
-                    <td className="px-4 py-2"></td>
-                    <td className="px-4 py-2 text-xs font-mono text-blue-600">{purchase.billNo}</td>
-                    <td className="px-4 py-2 text-xs text-gray-700">{purchase.date} | {purchase.itemName}</td>
-                    <td className="px-4 py-2"></td>
-                    <td className="px-4 py-2 text-xs text-right text-gray-700">{purchase.qty.toFixed(3)}</td>
-                    <td className="px-4 py-2 text-xs text-right text-gray-700">₹{purchase.amount.toFixed(2)}</td>
+        {loading ? <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-blue-500 mr-2" /><span>Loading...</span></div> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-gray-300">
+                <tr>
+                  <th className="px-3 py-2 w-8"></th>
+                  {['Code', 'Supplier', 'Bills', 'Qty (T)', 'Total Amount'].map(h => { const r = isNumericHeader(h); return <th key={h} className={`px-3 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap ${r?'text-right':'text-left'}`}>{h}</th>; })}
+                </tr>
+              </thead>
+              <tbody>
+                {groups.length === 0 ? <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-400">No records found</td></tr> : groups.flatMap(g => [
+                  <tr key={g.supplierId} onClick={() => toggle(g.supplierId)} className="border-b border-gray-300 hover:bg-blue-50 cursor-pointer bg-blue-50/30">
+                    <td className="px-3 py-2">{expanded.has(g.supplierId) ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{g.supplierCode}</td>
+                    <td className="px-3 py-2 font-medium">{g.supplierName}</td>
+                    <td className="px-3 py-2 text-right font-medium">{g.bills.length}</td>
+                    <td className="px-3 py-2 text-right font-medium">{g.totalQty.toFixed(3)}</td>
+                    <td className="px-3 py-2 text-right font-bold text-green-700">₹{inr(g.totalAmount)}</td>
+                  </tr>,
+                  ...(expanded.has(g.supplierId) ? g.bills.map(b => (
+                    <tr key={b.id} className="border-b border-gray-100 bg-gray-50/50">
+                      <td></td>
+                      <td className="px-3 py-1.5 text-xs font-mono text-blue-600">{b.purchaseNo}</td>
+                      <td className="px-3 py-1.5 text-xs text-gray-700">{fmtDateISO(b.purchaseDateTime)} | {b.itemNameSnapshot}</td>
+                      <td></td>
+                      <td className="px-3 py-1.5 text-xs text-right">{Number(b.netWeight).toFixed(3)}</td>
+                      <td className="px-3 py-1.5 text-xs text-right">₹{inr(b.grossPayable)}</td>
+                    </tr>
+                  )) : []),
+                ])}
+              </tbody>
+              {groups.length > 0 && (
+                <tfoot className="bg-gray-100 border-t-2 border-gray-300 font-bold">
+                  <tr>
+                    <td colSpan={3} className="px-3 py-2 text-right text-xs text-gray-600">GRAND TOTAL</td>
+                    <td className="px-3 py-2 text-right">{totals.bills}</td>
+                    <td className="px-3 py-2 text-right">{totals.qty.toFixed(3)}</td>
+                    <td className="px-3 py-2 text-right text-green-700">₹{inr(totals.amount)}</td>
                   </tr>
-                )) : [])
-              ])}
-            </tbody>
-            <tfoot className="bg-gray-900 text-white font-bold">
-              <tr>
-                <td colSpan={3} className="px-4 py-3 text-sm text-right">GRAND TOTAL:</td>
-                <td className="px-4 py-3 text-sm text-right">{totals.purchases}</td>
-                <td className="px-4 py-3 text-sm text-right">{totals.quantity.toFixed(3)}</td>
-                <td className="px-4 py-3 text-sm text-right">₹{totals.amount.toFixed(2)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        {filteredData.length === 0 && (
-          <div className="p-8 text-center text-gray-500">
-            No supplier-wise purchase data found for the selected criteria
+                </tfoot>
+              )}
+            </table>
           </div>
         )}
       </div>

@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router';
 import { Search, Loader2, FileText, Plus } from 'lucide-react';
 import { salesBillApi, type SalesBillRow, type SalesBillStatus } from '../services/operationsApi';
 import { describeError } from '../services/mastersApi';
+import { useAppContext } from '../context/AppContext';
+import { isInvoiceBillingOnly } from '../utils/roles';
 
 const STATUS_BADGE: Record<SalesBillStatus, string> = {
   DRAFT: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -22,6 +24,8 @@ export const SalesBillList = () => {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'' | SalesBillStatus>('');
+  const { user } = useAppContext();
+  const invoiceOnly = isInvoiceBillingOnly(user.roleCodes);
 
   const reload = async () => {
     setLoading(true); setError(null);
@@ -34,22 +38,34 @@ export const SalesBillList = () => {
   useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [statusFilter]);
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return rows;
+    const base = invoiceOnly
+      ? rows.filter((r) => {
+          // The list row carries `customer.billType`; an explicit override on the
+          // bill itself wins when present.
+          const effective = r.billTypeOverride ?? r.customer?.billType;
+          return effective === 'TAX_INVOICE';
+        })
+      : rows;
+    if (!search.trim()) return base;
     const q = search.toLowerCase();
-    return rows.filter((r) =>
+    return base.filter((r) =>
       r.billNo.toLowerCase().includes(q) ||
       r.vehicleNo.toLowerCase().includes(q) ||
       r.customer?.name.toLowerCase().includes(q) ||
       r.item?.name.toLowerCase().includes(q),
     );
-  }, [rows, search]);
+  }, [rows, search, invoiceOnly]);
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Sales Bills</h1>
-          <p className="text-sm text-muted-foreground">Tax invoices and non-GST bills generated from tokens.</p>
+          <p className="text-sm text-muted-foreground">
+            {invoiceOnly
+              ? 'Tax invoices generated from tokens.'
+              : 'Tax invoices and non-GST bills generated from tokens.'}
+          </p>
         </div>
         <button
           onClick={() => navigate('/operations/sales-bill/create')}

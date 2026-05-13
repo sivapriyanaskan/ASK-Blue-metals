@@ -8,6 +8,8 @@ import { PartialPaymentModal } from '../components/PartialPaymentModal';
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import { tokenApi, salesBillApi, systemSettingsApi, companyProfileApi, shiftApi, type TokenRow, type PaymentMode, type SalesBillFromTokenInput } from '../services/operationsApi';
 import { describeError, banksApi, billSundriesApi, type BankRow, type BillSundryRow } from '../services/mastersApi';
+import { useAppContext } from '../context/AppContext';
+import { isInvoiceBillingOnly } from '../utils/roles';
 
 const fmtNum = (s: string | number) => Number(s).toLocaleString(undefined, { maximumFractionDigits: 2 });
 const fmtMoney = (s: string | number) =>
@@ -25,7 +27,7 @@ const gstStateCode = (gstin: string | null | undefined): string | null => {
 const API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   'http://localhost:4000/api/v1';
-const API_ORIGIN = new URL(API_BASE).origin;
+const API_ORIGIN = new URL(API_BASE, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin;
 
 /** Resolve a stored image ref to a viewable URL (handles relative `/uploads`). */
 const resolveImageSrc = (ref: string | null | undefined): string | null => {
@@ -196,6 +198,8 @@ export const SalesBill = () => {
   const [tokenSearch, setTokenSearch] = useState('');
   const [banks, setBanks] = useState<BankRow[]>([]);
   const [inHandDenominations, setInHandDenominations] = useState<Record<string, number>>({});
+  const { user } = useAppContext();
+  const invoiceOnly = isInvoiceBillingOnly(user.roleCodes);
   const [availableSundries, setAvailableSundries] = useState<BillSundryRow[]>([]);
   const weightSectionRef = useRef<HTMLDivElement | null>(null);
   const paymentSectionRef = useRef<HTMLDivElement | null>(null);
@@ -706,6 +710,7 @@ export const SalesBill = () => {
       cashAmount: resolvedCashAmount,
       onlineAmount: resolvedOnlineAmount,
       creditAmount: resolvedCreditAmount,
+      driverBata: form.driverBataAmount ? Number(form.driverBataAmount) : 0,
       denominations: denominationsArr,
       remarks: form.remarks.trim() || null,
       paymentDeferralOption: hasPriorCarryForwardBalance
@@ -746,6 +751,7 @@ export const SalesBill = () => {
   // No tokenId — show token picker
   if (!tokenId) {
     const filtered = openTokens.filter((t) => {
+      if (invoiceOnly && t.customer?.billType !== 'TAX_INVOICE') return false;
       if (!tokenSearch.trim()) return true;
       const q = tokenSearch.toLowerCase();
       return (
@@ -955,12 +961,17 @@ export const SalesBill = () => {
                 {token.status}
               </div>
             </div>
-            <div className="border rounded-md bg-card p-4 space-y-1">
+            <div>
               <div className="text-xs uppercase font-medium text-muted-foreground tracking-wider mb-1">Customer</div>
               <div>{token.customer?.name || 'N/A'}</div>
               <div className="text-muted-foreground">
-                {token.customer?.billType === 'TAX_INVOICE' ? 'Tax Invoice' : 'Non-GST'}
-                {token.customer?.gstNumber ? ` · GSTIN ${token.customer.gstNumber}` : ''}
+                {!invoiceOnly && (
+                  <>
+                    {token.customer?.billType === 'TAX_INVOICE' ? 'Tax Invoice' : 'Non-GST'}
+                    {token.customer?.gstNumber ? ' · ' : ''}
+                  </>
+                )}
+                {token.customer?.gstNumber ? `GSTIN ${token.customer.gstNumber}` : ''}
               </div>
             </div>
             <div className="border rounded-md bg-card p-4 space-y-1">
@@ -1083,32 +1094,34 @@ export const SalesBill = () => {
                 placeholder="e.g. 33-Tamil Nadu"
               />
             </div>
-            <div>
-              <label className="text-sm font-medium block mb-1">
-                Bill Type <span className="text-red-500">*</span>
-              </label>
-              <select
-                name="billType"
-                value={form.billTypeOverride}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter') return;
-                  e.preventDefault();
-                  // Move to Bill Sundries Add button on Enter from Bill Type
-                  addBillSundryButtonRef.current?.focus({ preventScroll: true });
-                  addBillSundryButtonRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    billTypeOverride: e.target.value as FormState['billTypeOverride'],
-                  }))
-                }
-                className="px-3 py-2 w-full rounded-md border border-input bg-white text-sm"
-              >
-                <option value="TAX_INVOICE">Tax Invoice</option>
-                <option value="NON_GST">Invoice</option>
-              </select>
-            </div>
+            {!invoiceOnly && (
+              <div>
+                <label className="text-sm font-medium block mb-1">
+                  Bill Type <span className="text-red-500">*</span>
+                </label>
+                <select
+                  name="billType"
+                  value={form.billTypeOverride}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    // Move to Bill Sundries Add button on Enter from Bill Type
+                    addBillSundryButtonRef.current?.focus({ preventScroll: true });
+                    addBillSundryButtonRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      billTypeOverride: e.target.value as FormState['billTypeOverride'],
+                    }))
+                  }
+                  className="px-3 py-2 w-full rounded-md border border-input bg-white text-sm"
+                >
+                  <option value="TAX_INVOICE">Tax Invoice</option>
+                  <option value="NON_GST">Invoice</option>
+                </select>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1310,15 +1323,17 @@ export const SalesBill = () => {
         <div className="bg-white border rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">GST Breakdown</h2>
-            <span className={`text-xs px-2 py-1 rounded ${
-              token?.customer?.billType === 'TAX_INVOICE'
-                ? 'bg-green-100 text-green-700'
-                : 'bg-amber-100 text-amber-700'
-            }`}>
-              {token?.customer?.billType === 'TAX_INVOICE'
-                ? `Tax Invoice — GST ${token?.item?.gstPercent || 0}% applicable`
-                : `Non-GST customer — GST not applied (Item GST: ${token?.item?.gstPercent || 0}%)`}
-            </span>
+            {!invoiceOnly && (
+              <span className={`text-xs px-2 py-1 rounded ${
+                token?.customer?.billType === 'TAX_INVOICE'
+                  ? 'bg-green-100 text-green-700'
+                  : 'bg-amber-100 text-amber-700'
+              }`}>
+                {token?.customer?.billType === 'TAX_INVOICE'
+                  ? `Tax Invoice — GST ${token?.item?.gstPercent || 0}% applicable`
+                  : `Non-GST customer — GST not applied (Item GST: ${token?.item?.gstPercent || 0}%)`}
+              </span>
+            )}
           </div>
           <div className="grid grid-cols-6 gap-4 text-center">
             <div className="bg-gray-50 p-3 rounded">

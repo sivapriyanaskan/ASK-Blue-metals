@@ -69,7 +69,7 @@ export const CameraCapture = ({
         const json = (await res.json()) as { url: string };
         // Resolve relative `/uploads/...` URL against the API origin so the
         // <img> tag works regardless of the frontend port.
-        const apiOrigin = new URL(API_BASE).origin;
+        const apiOrigin = new URL(API_BASE, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin;
         const fullUrl = json.url.startsWith('http')
           ? json.url
           : `${apiOrigin}${json.url}`;

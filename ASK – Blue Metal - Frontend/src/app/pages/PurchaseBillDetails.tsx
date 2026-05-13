@@ -5,12 +5,13 @@ import {
   User, Truck, Scale, Camera, Download, ImageOff,
 } from 'lucide-react';
 import { purchaseBillApi, type PurchaseBillRow } from '../services/operationsApi';
+import { usersApi } from '../services/iamApi';
 import { describeError } from '../services/mastersApi';
 
 const API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   'http://localhost:4000/api/v1';
-const API_ORIGIN = new URL(API_BASE).origin;
+const API_ORIGIN = new URL(API_BASE, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin;
 
 const resolveImageSrc = (ref: string | null | undefined): string | null => {
   if (!ref) return null;
@@ -129,9 +130,136 @@ const SummaryLine = ({ label, value, valueClass = '' }: { label: string; value: 
   </div>
 );
 
+/* -------------------------------------------------------------------------- */
+/* Classical printable purchase bill (matches printed paper format)            */
+/* -------------------------------------------------------------------------- */
+
+const fmtClassicalDate = (s: string | null | undefined) => {
+  if (!s) return '';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return '';
+  const dd = String(d.getDate()).padStart(2, '0');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${dd}/${months[d.getMonth()]}/${d.getFullYear()}`;
+};
+
+const fmtClassicalTime = (s: string | null | undefined) => {
+  if (!s) return '';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+};
+
+const ClassicalBillRow = ({
+  pairs,
+  wrap = false,
+}: {
+  pairs: Array<[string, React.ReactNode]>;
+  wrap?: boolean;
+}) => (
+  <div className="grid grid-cols-[1.4fr_0.9fr_1.1fr] gap-x-6 gap-y-2 py-1 items-start">
+    {pairs.map(([k, v], i) => (
+      <div
+        key={i}
+        className={`flex text-[13px] leading-snug ${wrap ? '' : 'whitespace-nowrap'}`}
+      >
+        {k ? (
+          <>
+            <span className="font-bold text-gray-900 w-28 shrink-0">{k}</span>
+            <span className="text-gray-800 break-words">: {v}</span>
+          </>
+        ) : null}
+      </div>
+    ))}
+  </div>
+);
+
+const ClassicalBill = ({ bill, userName }: { bill: PurchaseBillRow; userName: string }) => {
+  const netWtTon = Number(bill.netWeight ?? 0);
+  const vehicleDriver = bill.driverNameSnapshot
+    ? `${bill.vehicleNoSnapshot}/${bill.driverNameSnapshot.slice(0, 3)}`
+    : bill.vehicleNoSnapshot;
+  const crRefRaw = bill.passNoSnapshot ?? bill.entryPass?.passNo ?? '';
+  // Show only the last 4 characters of the reference (digits if available)
+  const digits = crRefRaw.replace(/\D/g, '');
+  const crRef = digits.length >= 4 ? digits.slice(-4) : crRefRaw.slice(-4);
+  const itemName = bill.itemNameSnapshot || bill.item?.name || '';
+
+  return (
+    <div id="purchase-bill-print" className="bg-white border border-gray-300 px-10 py-6 mb-6 print-area">
+      {/* Heading */}
+      <div className="text-center">
+        <h2 className="text-xl font-bold text-gray-900 tracking-wide">Ask M Sand</h2>
+      </div>
+      <div className="text-center text-[12px] text-gray-700 mb-3">
+        No:48 , Thollamur Village &amp; Post, Villupuram District,
+      </div>
+
+      <div className="text-center mb-2">
+        <span className="text-[15px] font-bold text-gray-900 tracking-wider">PURCHASE</span>
+      </div>
+
+      {/* Header block (table-like, with a horizontal divider above & below) */}
+      <div className="border-t border-b border-gray-700 py-2">
+        <ClassicalBillRow
+          pairs={[
+            ['Purchase No', <span key="pn" className="font-mono">{bill.purchaseNo}</span>],
+            ['Cr.Ref No', <span key="cr" className="font-mono">{crRef}</span>],
+            ['Date', fmtClassicalDate(bill.purchaseDateTime)],
+          ]}
+        />
+        <ClassicalBillRow
+          pairs={[
+            ['Supplier Name', bill.supplierNameSnapshot],
+            ['', ''],
+            ['Time', fmtClassicalTime(bill.purchaseDateTime)],
+          ]}
+        />
+        <ClassicalBillRow
+          wrap
+          pairs={[
+            ['Supplier Addres', bill.supplier?.address ?? ''],
+            ['', ''],
+            ['Vehicle No', <span key="vn" className="font-mono">{vehicleDriver}</span>],
+          ]}
+        />
+        <ClassicalBillRow
+          pairs={[
+            ['', ''],
+            ['', ''],
+            ['User', userName],
+          ]}
+        />
+      </div>
+
+      {/* Item table */}
+      <div className="mt-3">
+        <div className="grid grid-cols-[1fr_140px] border-b border-gray-700 pb-1.5 mb-1.5">
+          <div className="text-[13px] font-bold uppercase tracking-wide text-gray-900">
+            Description of Item
+          </div>
+          <div className="text-[13px] font-bold text-right text-gray-900">Tone</div>
+        </div>
+
+        <div className="grid grid-cols-[1fr_140px] py-0.5">
+          <div className="text-[13px] text-gray-800">{itemName || '-'}</div>
+          <div className="text-[13px] text-right text-gray-800">{netWtTon.toFixed(2)}</div>
+        </div>
+
+        <div className="border-t border-gray-300 mt-1.5 pt-1.5 grid grid-cols-[1fr_140px]">
+          <div className="text-[13px] font-bold text-gray-900">Total</div>
+          <div className="text-[13px] font-bold text-right text-gray-900">{netWtTon.toFixed(2)}</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 export const PurchaseBillDetails = () => {
   const { id } = useParams();
   const [bill, setBill] = useState<PurchaseBillRow | null>(null);
+  const [userName, setUserName] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -142,7 +270,17 @@ export const PurchaseBillDetails = () => {
     if (!id) return;
     setLoading(true);
     purchaseBillApi.get(id)
-      .then(setBill)
+      .then((b) => {
+        setBill(b);
+        if (b.createdById) {
+          usersApi.get(b.createdById)
+            .then((u) => {
+              const full = `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim();
+              setUserName(full || u.username || b.createdById);
+            })
+            .catch(() => setUserName(b.createdById));
+        }
+      })
       .catch(e => setError(describeError(e, 'Failed to load purchase bill')))
       .finally(() => setLoading(false));
   }, [id]);
@@ -158,6 +296,65 @@ export const PurchaseBillDetails = () => {
       setError(describeError(e, 'Cancel failed'));
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handlePrint = () => {
+    const source = document.getElementById('purchase-bill-print');
+    if (!source) {
+      window.print();
+      return;
+    }
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    // Carry over the page's stylesheets so Tailwind classes render.
+    const headLinks = Array.from(
+      document.querySelectorAll('link[rel="stylesheet"], style'),
+    )
+      .map((n) => n.outerHTML)
+      .join('\n');
+
+    const html = `<!doctype html><html><head><title></title>${headLinks}
+      <style>
+        @page { size: A4; margin: 12mm; }
+        html, body { background:#fff; margin:0; padding:0; }
+        body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+      </style></head><body>${source.outerHTML}</body></html>`;
+
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) {
+      document.body.removeChild(iframe);
+      window.print();
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const trigger = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } finally {
+        setTimeout(() => {
+          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+        }, 1000);
+      }
+    };
+    // Wait for stylesheets to load before printing.
+    if (iframe.contentWindow) {
+      iframe.contentWindow.addEventListener('load', trigger);
+      // Fallback in case load doesn't fire.
+      setTimeout(trigger, 600);
+    } else {
+      setTimeout(trigger, 300);
     }
   };
 
@@ -180,12 +377,30 @@ export const PurchaseBillDetails = () => {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <Link to="/operations/purchase-bill" className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-4 text-sm">
+      {/* Print rules: only the classical bill prints; suppress browser header/footer. */}
+      <style>{`
+        @media print {
+          @page { size: A4; margin: 12mm; }
+          html, body { background: #fff !important; }
+          body * { visibility: hidden !important; }
+          .print-area, .print-area * { visibility: visible !important; }
+          .print-area {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%;
+            padding: 0 !important;
+            border: none !important;
+          }
+          .no-print { display: none !important; }
+        }
+      `}</style>
+
+      <Link to="/operations/purchase-bill" className="no-print inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-4 text-sm">
         <ArrowLeft className="w-4 h-4" /> Back to List
       </Link>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+      <div className="no-print flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-2xl font-bold text-gray-900">Purchase Bill Details</h1>
@@ -194,7 +409,7 @@ export const PurchaseBillDetails = () => {
           <p className="text-gray-600 text-sm">Purchase No: <span className="font-mono font-bold">{bill.purchaseNo}</span></p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => window.print()}
+          <button onClick={handlePrint}
             className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm">
             <Download className="w-4 h-4" /> Download
           </button>
@@ -207,9 +422,12 @@ export const PurchaseBillDetails = () => {
         </div>
       </div>
 
+      {/* Classical printable bill — also prints to PDF when user hits Download */}
+      <ClassicalBill bill={bill} userName={userName || bill.createdById} />
+
       {/* Posted banner */}
       {bill.status === 'POSTED' && (
-        <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
+        <div className="no-print mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
           <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0 mt-0.5" />
           <div>
             <div className="font-semibold text-green-900">Purchase Bill Posted</div>
@@ -220,7 +438,7 @@ export const PurchaseBillDetails = () => {
 
       {/* Cancelled banner */}
       {bill.status === 'CANCELLED' && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+        <div className="no-print mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
           <XCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
           <div>
             <div className="font-semibold text-red-900">Purchase Bill Cancelled</div>
@@ -231,7 +449,7 @@ export const PurchaseBillDetails = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="no-print grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* LEFT: 2/3 */}
         <div className="lg:col-span-2 space-y-5">
           <Card icon={FileText} title="Bill Header">

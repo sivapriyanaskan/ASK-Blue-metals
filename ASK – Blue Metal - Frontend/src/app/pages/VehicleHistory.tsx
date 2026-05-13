@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Calendar, Loader2 } from 'lucide-react';
+import { Calendar, Loader2, Download, Printer } from 'lucide-react';
 import { tokenApi, purchaseBillApi, type TokenRow, type PurchaseBillRow } from '../services/operationsApi';
 import { vehiclesApi, describeError, type VehicleRow } from '../services/mastersApi';
 import { SearchableDropdown, type SearchableDropdownOption } from '../components/ui/searchable-dropdown';
+import { downloadReportCSV, printReport, fmtDateISO, isNumericHeader, type ReportColumn, currentMonthStart, currentMonthEnd } from '../utils/reportExport';
 
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('en-IN');
 
@@ -18,8 +19,8 @@ interface Trip {
 
 export const VehicleHistory = () => {
   const [vehicleRegNo, setVehicleRegNo] = useState('');
-  const [dateFrom, setDateFrom] = useState('2026-03-01');
-  const [dateTo, setDateTo] = useState('2026-03-31');
+  const [dateFrom, setDateFrom] = useState(currentMonthStart());
+  const [dateTo, setDateTo] = useState(currentMonthEnd());
   const [vehicles, setVehicles] = useState<VehicleRow[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(false);
@@ -73,11 +74,37 @@ export const VehicleHistory = () => {
     ...vehicles.map(v => ({ value: v.registrationNumber, label: v.registrationNumber, description: v.name })),
   ];
 
+  const columns: ReportColumn<Trip>[] = [
+    { header: 'Date', value: t => fmtDateISO(t.date) },
+    { header: 'Doc No', value: t => t.docNo },
+    { header: 'Type', value: t => t.type },
+    { header: 'Party', value: t => t.party },
+    { header: 'Item', value: t => t.item },
+    { header: 'Net Wt (T)', value: t => t.netWeight.toFixed(2), align: 'right' },
+    { header: 'Driver', value: t => t.driver },
+  ];
+  const meta = () => ({
+    title: 'Vehicle History',
+    subtitle: [
+      vehicleRegNo ? `Vehicle: ${vehicleRegNo}` : '',
+      `From ${fmtDateISO(dateFrom)} to ${fmtDateISO(dateTo)}`,
+    ].filter(Boolean) as string[],
+    totals: ['', '', '', '', 'TOTAL', totalWeight.toFixed(2), ''],
+  });
+  const handleDownload = () => downloadReportCSV(trips, columns, meta());
+  const handlePrint = () => printReport(trips, columns, meta());
+
   return (
     <div className="p-6">
-      <div className="mb-4 pb-3 border-b border-gray-300">
-        <h1 className="text-xl font-bold text-gray-900">Vehicle History</h1>
-        <p className="text-sm text-gray-500">All trips (sales + purchase) for a vehicle from DB</p>
+      <div className="mb-4 pb-3 border-b border-gray-300 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Vehicle History</h1>
+          <p className="text-sm text-gray-500">All trips (sales + purchase) for a vehicle from DB</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleDownload} disabled={!trips.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
+          <button onClick={handlePrint} disabled={!trips.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
+        </div>
       </div>
       <div className="bg-white rounded-lg border border-gray-300 p-4 mb-4">
         <div className="grid grid-cols-4 gap-3">
@@ -109,7 +136,7 @@ export const VehicleHistory = () => {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-300">
-                  <tr>{['Date','Doc No','Type','Party','Item','Net Wt (T)','Driver'].map(h=><th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-600 whitespace-nowrap">{h}</th>)}</tr>
+                  <tr>{['Date','Doc No','Type','Party','Item','Net Wt (T)','Driver'].map(h=>{ const r = isNumericHeader(h); return <th key={h} className={`px-3 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap ${r?'text-right':'text-left'}`}>{h}</th>; })}</tr>
                 </thead>
                 <tbody>
                   {trips.length === 0 ? <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-400">No trips found</td></tr>

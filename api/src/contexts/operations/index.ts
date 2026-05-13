@@ -3,6 +3,7 @@ import { salesBillRouter } from './salesBill/router.js';
 import { purchaseEntryPassRouter } from './purchaseEntryPass/router.js';
 import { purchaseBillRouter } from './purchaseBill/router.js';
 import { shiftRouter } from './shift/router.js';
+import { shiftReportRouter } from './shift/report.router.js';
 import { currencyExchangeRouter } from './currencyExchange/router.js';
 import { cashVoucherRouter } from './cashVoucher/router.js';
 import { fuelConsumptionRouter } from './fuelConsumption/router.js';
@@ -17,6 +18,7 @@ export function mountOperationsRoutes() {
     purchaseEntryPasses: purchaseEntryPassRouter,
     purchaseBills: purchaseBillRouter,
     shifts: shiftRouter,
+    shiftReports: shiftReportRouter,
     currencyExchanges: currencyExchangeRouter,
     cashVouchers: cashVoucherRouter,
     fuelConsumptions: fuelConsumptionRouter,

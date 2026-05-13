@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Plus, Search, Eye, Edit, Loader2 } from 'lucide-react';
+import { Plus, Search, Eye, Edit, Loader2, Download } from 'lucide-react';
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import { shiftApi, type ShiftRow, type ShiftStatus } from '../services/operationsApi';
 import { describeError } from '../services/mastersApi';
@@ -26,6 +26,14 @@ export const ShiftManagementList = () => {
   };
 
   useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [statusFilter]);
+
+  const handleDownloadReport = async (id: string) => {
+    try {
+      await shiftApi.downloadReport(id);
+    } catch (err) {
+      alert(describeError(err, 'Failed to download shift report'));
+    }
+  };
 
   const filteredShifts = useMemo(() => {
     if (!searchTerm.trim()) return rows;
@@ -115,6 +123,16 @@ export const ShiftManagementList = () => {
                         <Link to={`/shift/edit/${shift.id}`} className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg" title="Edit">
                           <Edit className="w-4 h-4" />
                         </Link>
+                      )}
+                      {shift.status === 'CLOSED' && (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadReport(shift.id)}
+                          className="p-2 text-green-600 hover:bg-green-50 rounded-lg"
+                          title="Download shift closing report"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
                       )}
                     </div>
                   </td>

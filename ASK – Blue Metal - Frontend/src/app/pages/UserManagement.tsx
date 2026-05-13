@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Plus, Search, Edit, Trash2, Save, ArrowLeft, Loader2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
+import { Plus, Search, Edit, Eye, Trash2, Save, ArrowLeft, Loader2, X } from 'lucide-react';
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import {
   usersApi,
@@ -9,6 +10,8 @@ import {
   type RoleRow,
 } from '../services/iamApi';
 import { describeError } from '../services/mastersApi';
+import { useAppContext } from '../context/AppContext';
+import { SUPER_ADMIN_ONLY_ROLE_CODES, isSuperAdmin } from '../utils/roles';
 
 type Mode = 'list' | 'create' | 'edit';
 
@@ -33,6 +36,7 @@ const empty: FormState = {
 };
 
 export const UserManagement = () => {
+  const navigate = useNavigate();
   const [mode, setMode] = useState<Mode>('list');
   const [items, setItems] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleRow[]>([]);
@@ -42,6 +46,19 @@ export const UserManagement = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(empty);
+  const { user } = useAppContext();
+  const canSeeElevatedRoles = isSuperAdmin(user.roleCodes);
+  const visibleRoles = useMemo(
+    () => {
+      // SUPER_ADMIN is never assignable through the UI – no one (not even a
+      // Super Admin) can create another Super Admin from here.
+      const base = roles.filter((r) => r.code !== 'SUPER_ADMIN');
+      return canSeeElevatedRoles
+        ? base
+        : base.filter((r) => !SUPER_ADMIN_ONLY_ROLE_CODES.has(r.code));
+    },
+    [roles, canSeeElevatedRoles],
+  );
 
   useEffect(() => {
     rolesApi.list().then((r) => setRoles(r.items)).catch(() => undefined);
@@ -220,6 +237,7 @@ export const UserManagement = () => {
                   </td>
                   <td className="px-6 py-4 text-right text-sm font-medium">
                     <div className="flex items-center justify-end gap-2">
+                      <button onClick={() => navigate(`/admin/users/${u.id}`)} className="text-blue-600 hover:text-blue-900" title="View"><Eye className="w-4 h-4" /></button>
                       <button onClick={() => openEdit(u.id)} className="text-green-600 hover:text-green-900" title="Edit"><Edit className="w-4 h-4" /></button>
                       {u.status !== 'INACTIVE' && (
                         <button onClick={() => handleDeactivate(u.id)} className="text-red-600 hover:text-red-900" title="Deactivate"><Trash2 className="w-4 h-4" /></button>
@@ -290,7 +308,7 @@ export const UserManagement = () => {
 
         <h3 className="font-semibold mb-4 pb-2 border-b border-gray-300">Roles *</h3>
         <div className="grid grid-cols-2 gap-2 mb-6">
-          {roles.map((r) => (
+          {visibleRoles.map((r) => (
             <label key={r.code} className="flex items-start gap-2 p-3 border border-gray-300 rounded hover:bg-gray-50 cursor-pointer">
               <input
                 type="checkbox"

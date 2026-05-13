@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Calendar, Search, Loader2 } from 'lucide-react';
+import { Calendar, Search, Loader2, Download, Printer } from 'lucide-react';
 import { auditApi, type AuditLogRow } from '../services/iamApi';
 import { describeError } from '../services/mastersApi';
+import { downloadReportCSV, printReport, type ReportColumn, currentMonthStart, currentMonthEnd } from '../utils/reportExport';
 
 const fmtDate = (iso: string) => new Date(iso).toLocaleString('en-IN');
 
 export const EditLogReport = () => {
-  const [dateFrom, setDateFrom] = useState('2026-03-01');
-  const [dateTo, setDateTo] = useState('2026-03-31');
+  const [dateFrom, setDateFrom] = useState(currentMonthStart());
+  const [dateTo, setDateTo] = useState(currentMonthEnd());
   const [resource, setResource] = useState('');
   const [action, setAction] = useState('');
   const [logs, setLogs] = useState<AuditLogRow[]>([]);
@@ -37,6 +38,26 @@ export const EditLogReport = () => {
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
+  const columns: ReportColumn<AuditLogRow>[] = [
+    { header: 'Date/Time', value: l => fmtDate(l.createdAt) },
+    { header: 'Resource', value: l => l.resource },
+    { header: 'Resource ID', value: l => l.resourceId ?? '' },
+    { header: 'Action', value: l => l.action },
+    { header: 'Actor', value: l => l.actorName ?? l.actorId ?? '' },
+    { header: 'Changes', value: l => l.changes ? JSON.stringify(l.changes) : '' },
+  ];
+  const meta = () => ({
+    title: 'Edit Log Report',
+    subtitle: [
+      `From ${dateFrom} to ${dateTo}`,
+      resource ? `Resource: ${resource}` : '',
+      action ? `Action: ${action}` : '',
+      `Total: ${total} records`,
+    ].filter(Boolean) as string[],
+  });
+  const handleDownload = () => downloadReportCSV(logs, columns, meta());
+  const handlePrint = () => printReport(logs, columns, meta());
+
   const actionColor = (a: string) => {
     if (a.includes('create')) return 'bg-green-100 text-green-700';
     if (a.includes('delete') || a.includes('cancel')) return 'bg-red-100 text-red-700';
@@ -46,9 +67,15 @@ export const EditLogReport = () => {
 
   return (
     <div className="p-6">
-      <div className="mb-4 pb-3 border-b border-gray-300">
-        <h1 className="text-xl font-bold text-gray-900">Edit Log Report</h1>
-        <p className="text-sm text-gray-500">Immutable audit trail of all create / update / delete actions from DB</p>
+      <div className="mb-4 pb-3 border-b border-gray-300 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Edit Log Report</h1>
+          <p className="text-sm text-gray-500">Immutable audit trail of all create / update / delete actions from DB</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleDownload} disabled={!logs.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
+          <button onClick={handlePrint} disabled={!logs.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
+        </div>
       </div>
       <div className="bg-white rounded-lg border border-gray-300 p-4 mb-4">
         <div className="grid grid-cols-5 gap-3">

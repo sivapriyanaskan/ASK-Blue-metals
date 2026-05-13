@@ -1,14 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useAppContext } from '../context/AppContext';
 import { Power, CheckCircle, AlertCircle, Clock, DollarSign, User, X } from 'lucide-react';
 import { shiftApi, purchaseConsumptionApi, type PurchaseConsumptionRow } from '../services/operationsApi';
 import { describeError } from '../services/mastersApi';
+import { AdminActiveShiftsPanel } from '../components/AdminActiveShiftsPanel';
+
+const ADMIN_ROLES = ['Admin'];
 
 export const ShiftOpen = () => {
+  const { user } = useAppContext();
+  // Admins don't run shifts themselves — they monitor others'.
+  if (ADMIN_ROLES.includes(user.role)) {
+    return <AdminActiveShiftsPanel />;
+  }
+  return <ShiftOpenForm />;
+};
+
+const ShiftOpenForm = () => {
   const navigate = useNavigate();
   const { user, shiftStatus, refreshShiftStatus, hardwareDevices } = useAppContext();
-  
+
   const [openingBalance, setOpeningBalance] = useState<number>(0);
   const [remarks, setRemarks] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);

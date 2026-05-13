@@ -41,6 +41,7 @@ const Create = z.object({
   emptyWeight: z.coerce.number().nonnegative(),
   rate: z.coerce.number().nonnegative(),
   gstPercent: z.coerce.number().nonnegative().default(0),
+  driverBata: z.coerce.number().nonnegative().default(0),
   paymentMode: z.enum(['CASH', 'ONLINE', 'CREDIT', 'MIXED']).default('CREDIT'),
   confirmationReason: z.string().trim().max(500).optional().nullable(),
   anprImageRef: z.string().trim().max(500).optional().nullable(),
@@ -88,7 +89,20 @@ router.get('/', validate('query', ListQuery), asyncHandler(async (req, res) => {
     }),
     prisma.purchaseBill.count({ where }),
   ]);
-  res.json({ items, page: q.page, pageSize: q.pageSize, total });
+  const creatorIds = Array.from(new Set(items.map(b => b.createdById).filter(Boolean)));
+  const creators = creatorIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: creatorIds } },
+        select: { id: true, firstName: true, lastName: true, username: true },
+      })
+    : [];
+  const creatorMap: Record<string, string> = {};
+  for (const u of creators) {
+    const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.username;
+    creatorMap[u.id] = name;
+  }
+  const enriched = items.map(b => ({ ...b, createdByName: creatorMap[b.createdById] ?? null }));
+  res.json({ items: enriched, page: q.page, pageSize: q.pageSize, total });
 }));
 
 router.get('/:id', validate('params', IdParam), asyncHandler(async (req, res) => {
@@ -187,6 +201,7 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
           gstPercent: data.gstPercent,
           gstAmount,
           grossPayable,
+          driverBata: data.driverBata,
           confirmationReason: data.confirmationReason ?? null,
           paymentMode: data.paymentMode,
           anprImageRef: data.anprImageRef ?? null,

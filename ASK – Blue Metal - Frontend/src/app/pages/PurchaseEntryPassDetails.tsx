@@ -11,7 +11,7 @@ import { describeError } from '../services/mastersApi';
 const API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
   'http://localhost:4000/api/v1';
-const API_ORIGIN = new URL(API_BASE).origin;
+const API_ORIGIN = new URL(API_BASE, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin;
 
 const resolveImageSrc = (ref: string | null | undefined): string | null => {
   if (!ref) return null;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, Eye, Edit, Trash2, Save, ArrowLeft, Loader2, X, Wand2 } from 'lucide-react';
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import {
@@ -9,6 +9,8 @@ import {
   type CustomerInput,
   type CustomerVehicleInput,
 } from '../services/mastersApi';
+import { useAppContext } from '../context/AppContext';
+import { isInvoiceBillingOnly } from '../utils/roles';
 
 type Mode = 'list' | 'create' | 'edit' | 'view';
 type BillTypeVal = 'TAX_INVOICE' | 'NON_GST';
@@ -57,6 +59,15 @@ export const CustomerMaster = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(empty);
   const [viewing, setViewing] = useState<CustomerRow | null>(null);
+  const { user } = useAppContext();
+  const invoiceOnly = isInvoiceBillingOnly(user.roleCodes);
+
+  // Only show GST/Tax-Invoice customers when the signed-in user is restricted
+  // to invoice billing.
+  const visibleItems = useMemo(
+    () => (invoiceOnly ? items.filter((c) => c.billType === 'TAX_INVOICE') : items),
+    [items, invoiceOnly],
+  );
 
   const reload = async () => {
     setLoading(true);
@@ -261,7 +272,7 @@ export const CustomerMaster = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {items.map((c) => (
+              {visibleItems.map((c) => (
                 <tr key={c.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 font-medium text-gray-900">{c.code}</td>
                   <td className="px-6 py-4 text-gray-900">{c.name}</td>
@@ -358,6 +369,7 @@ export const CustomerMaster = () => {
           <Inp label="Name *" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
           <div className="col-span-2"><Txt label="Address" value={form.address} onChange={(v) => setForm({ ...form, address: v })} /></div>
           <Inp label="State" value={form.state} onChange={(v) => setForm({ ...form, state: v })} />
+          {!invoiceOnly && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Bill Type *</label>
             <SearchableDropdown
@@ -373,7 +385,8 @@ export const CustomerMaster = () => {
               placeholder="Select"
             />
           </div>
-          {form.billType === 'TAX_INVOICE' && (
+          )}
+          {(invoiceOnly || form.billType === 'TAX_INVOICE') && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               GSTIN{form.billType === 'TAX_INVOICE' ? ' *' : ''}

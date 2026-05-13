@@ -20,6 +20,20 @@ const fmtMoney = (s: string | number) =>
 const fmtNum = (s: string | number) =>
   Number(s).toLocaleString('en-IN', { minimumFractionDigits: 6, maximumFractionDigits: 6 });
 
+const API_BASE =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+  'http://localhost:4000/api/v1';
+const API_ORIGIN = new URL(
+  API_BASE,
+  typeof window !== 'undefined' ? window.location.origin : 'http://localhost',
+).origin;
+const resolveImageSrc = (ref: string | null | undefined): string | null => {
+  if (!ref) return null;
+  if (ref.startsWith('data:') || ref.startsWith('http://') || ref.startsWith('https://')) return ref;
+  if (ref.startsWith('/')) return `${API_ORIGIN}${ref}`;
+  return null;
+};
+
 // ── Number to words (Indian English) ───────────────────────────────────────
 const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
   'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
@@ -101,12 +115,29 @@ export const SalesBillDetails = () => {
     </div>
   );
 
-  const isIgst = Number(row.igstAmount) > 0;
-  const totalGstAmount = Number(row.igstAmount) + Number(row.cgstAmount) + Number(row.sgstAmount);
-  const gstPercent = isIgst
-    ? Number(row.igstPercent)
-    : Number(row.cgstPercent) + Number(row.sgstPercent);
-  const inWords = numberToWords(Number(row.totalAmount));
+  const effectiveBillType = row.billTypeOverride ?? row.customer?.billType;
+  // For NON_GST bills the qty/amount are stored as the (already halved) display values
+  // and the saved GST is zero. The printed invoice should still show a 5% GST on top
+  // of the displayed (half) amount — split equally as CGST 2.5% + SGST 2.5%.
+  const NON_GST_DISPLAY_RATE = 5;
+  const isNonGstDisplay = effectiveBillType === 'NON_GST';
+
+  const isIgst = !isNonGstDisplay && Number(row.igstAmount) > 0;
+  const taxableNum = Number(row.taxableAmount);
+  // NON_GST: round each GST component to whole rupees (no paise).
+  const dispCgst = isNonGstDisplay ? Math.round(taxableNum * NON_GST_DISPLAY_RATE / 2 / 100) : Number(row.cgstAmount);
+  const dispSgst = isNonGstDisplay ? Math.round(taxableNum * NON_GST_DISPLAY_RATE / 2 / 100) : Number(row.sgstAmount);
+  const dispIgst = isNonGstDisplay ? 0 : Number(row.igstAmount);
+  const totalGstAmount = dispCgst + dispSgst + dispIgst;
+  const gstPercent = isNonGstDisplay
+    ? NON_GST_DISPLAY_RATE
+    : isIgst
+      ? Number(row.igstPercent)
+      : Number(row.cgstPercent) + Number(row.sgstPercent);
+  const displayTotalAmount = isNonGstDisplay
+    ? +(Number(row.totalAmount) + totalGstAmount).toFixed(2)
+    : Number(row.totalAmount);
+  const inWords = numberToWords(displayTotalAmount);
 
   return (
     <div className="p-4 max-w-4xl mx-auto space-y-4">
@@ -243,7 +274,7 @@ export const SalesBillDetails = () => {
               <td className="border border-gray-400 px-2 py-1 text-right tabular-nums">{fmtMoney(row.taxableAmount)}</td>
               <td className="border border-gray-400 px-2 py-1 text-right tabular-nums">{gstPercent > 0 ? `${gstPercent}.00` : '—'}</td>
               <td className="border border-gray-400 px-2 py-1 text-right tabular-nums">{fmtMoney(totalGstAmount)}</td>
-              <td className="border border-gray-400 px-2 py-1 text-right tabular-nums">{fmtMoney(row.totalAmount)}</td>
+              <td className="border border-gray-400 px-2 py-1 text-right tabular-nums">{fmtMoney(displayTotalAmount)}</td>
             </tr>
           </tbody>
         </table>
@@ -257,25 +288,25 @@ export const SalesBillDetails = () => {
                 <td className="pr-2">:</td>
                 <td className="text-right tabular-nums w-28">{fmtMoney(row.taxableAmount)}</td>
               </tr>
-              {isIgst && Number(row.igstAmount) > 0 && (
+              {isIgst && dispIgst > 0 && (
                 <tr>
                   <td className="font-semibold pr-8 py-0.5">IGST</td>
                   <td className="pr-2">:</td>
-                  <td className="text-right tabular-nums">{fmtMoney(row.igstAmount)}</td>
+                  <td className="text-right tabular-nums">{fmtMoney(dispIgst)}</td>
                 </tr>
               )}
-              {!isIgst && Number(row.cgstAmount) > 0 && (
+              {!isIgst && dispCgst > 0 && (
                 <tr>
                   <td className="font-semibold pr-8 py-0.5">CGST</td>
                   <td className="pr-2">:</td>
-                  <td className="text-right tabular-nums">{fmtMoney(row.cgstAmount)}</td>
+                  <td className="text-right tabular-nums">{fmtMoney(dispCgst)}</td>
                 </tr>
               )}
-              {!isIgst && Number(row.sgstAmount) > 0 && (
+              {!isIgst && dispSgst > 0 && (
                 <tr>
                   <td className="font-semibold pr-8 py-0.5">SGST</td>
                   <td className="pr-2">:</td>
-                  <td className="text-right tabular-nums">{fmtMoney(row.sgstAmount)}</td>
+                  <td className="text-right tabular-nums">{fmtMoney(dispSgst)}</td>
                 </tr>
               )}
               {Number(row.tcsAmount) > 0 && (
@@ -295,11 +326,94 @@ export const SalesBillDetails = () => {
               <tr className="border-t border-gray-400 font-bold">
                 <td className="pr-8 py-0.5">NET AMOUNT</td>
                 <td className="pr-2">:</td>
-                <td className="text-right tabular-nums">{fmtMoney(row.totalAmount)}</td>
+                <td className="text-right tabular-nums">{fmtMoney(displayTotalAmount)}</td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        {/* Payment breakup */}
+        {(() => {
+          const rawCash = Number(row.cashAmount) || 0;
+          const rawOnline = Number(row.onlineAmount) || 0;
+          const credit = Number(row.creditAmount) || 0;
+          // Real (un-halved) bill total — for NON_GST the stored totalAmount is half.
+          const realTotal = isNonGstDisplay
+            ? +(Number(row.totalAmount) * 2).toFixed(2)
+            : displayTotalAmount;
+          const realPaid = +(rawCash + rawOnline).toFixed(2);
+          // Balance is computed against the real total and shown as-is on the bill.
+          const balance = Math.max(0, +(realTotal - realPaid - credit).toFixed(2));
+          const isPartial = balance > 0.005;
+          // Paid shown on the (halved) bill = displayTotal - balance, so the math reads correctly.
+          const paidShown = +(displayTotalAmount - balance).toFixed(2);
+          // Split paidShown into Cash / Online proportionally to what was received.
+          let cashShown = 0;
+          let onlineShown = 0;
+          if (paidShown > 0) {
+            if (rawCash + rawOnline > 0) {
+              cashShown = +(paidShown * (rawCash / (rawCash + rawOnline))).toFixed(2);
+              onlineShown = +(paidShown - cashShown).toFixed(2);
+            } else {
+              cashShown = paidShown;
+            }
+          }
+          return (
+            <div className="flex justify-end mb-4 -mt-2">
+              <table className="text-xs">
+                <tbody>
+                  <tr>
+                    <td className="font-semibold pr-8 py-0.5">Payment Mode</td>
+                    <td className="pr-2">:</td>
+                    <td className="text-right tabular-nums w-28">{row.paymentMode}</td>
+                  </tr>
+                  {isPartial && cashShown > 0 && (
+                    <tr>
+                      <td className="font-semibold pr-8 py-0.5">Cash</td>
+                      <td className="pr-2">:</td>
+                      <td className="text-right tabular-nums">{fmtMoney(cashShown)}</td>
+                    </tr>
+                  )}
+                  {isPartial && onlineShown > 0 && (
+                    <tr>
+                      <td className="font-semibold pr-8 py-0.5">Online</td>
+                      <td className="pr-2">:</td>
+                      <td className="text-right tabular-nums">{fmtMoney(onlineShown)}</td>
+                    </tr>
+                  )}
+                  {isPartial && (
+                    <tr>
+                      <td className="font-semibold pr-8 py-0.5">Paid</td>
+                      <td className="pr-2">:</td>
+                      <td className="text-right tabular-nums font-semibold">{fmtMoney(paidShown)}</td>
+                    </tr>
+                  )}
+                  {isPartial && (
+                    <tr className="text-red-700">
+                      <td className="font-semibold pr-8 py-0.5">Balance Due</td>
+                      <td className="pr-2">:</td>
+                      <td className="text-right tabular-nums font-bold">{fmtMoney(balance)}</td>
+                    </tr>
+                  )}
+                  {!isPartial && credit > 0 && (
+                    <tr>
+                      <td className="font-semibold pr-8 py-0.5">On Credit</td>
+                      <td className="pr-2">:</td>
+                      <td className="text-right tabular-nums">{fmtMoney(displayTotalAmount)}</td>
+                    </tr>
+                  )}
+                  {!isPartial && credit <= 0 && (
+                    <tr>
+                      <td className="font-semibold pr-8 py-0.5">Paid</td>
+                      <td className="pr-2">:</td>
+                      <td className="text-right tabular-nums font-semibold">{fmtMoney(displayTotalAmount)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
 
         {/* In words */}
         <div className="border-t border-gray-300 pt-2 mb-4 text-xs">
@@ -343,6 +457,168 @@ export const SalesBillDetails = () => {
           {row.confirmationReason}
         </div>
       )}
+
+      {/* Internal details — NOT printed on the bill. Shows real (un-halved) amounts,
+          actual quantity/weights, denomination breakdown and entry images. */}
+      {(() => {
+        const realScale = isNonGstDisplay ? 2 : 1;
+        const realTaxable = +(Number(row.taxableAmount) * realScale).toFixed(2);
+        const realCgst = Number(row.cgstAmount) || 0;
+        const realSgst = Number(row.sgstAmount) || 0;
+        const realIgst = Number(row.igstAmount) || 0;
+        const realTotal = +(Number(row.totalAmount) * realScale).toFixed(2);
+        const realNet = +(Number(row.netWeight) * realScale).toFixed(3);
+        const realEmpty = Number(row.emptyWeight) || 0;
+        const realGross = Number(row.grossWeight) || 0;
+        const cash = Number(row.cashAmount) || 0;
+        const online = Number(row.onlineAmount) || 0;
+        const credit = Number(row.creditAmount) || 0;
+        const paid = +(cash + online).toFixed(2);
+        const balance = +(realTotal - paid - credit).toFixed(2);
+        const denoms = Array.isArray(row.denominations) ? row.denominations.filter(d => Number(d.nos) > 0) : [];
+        const denomTotal = denoms.reduce((s, d) => s + (Number(d.amount) || Number(d.denomination) * Number(d.nos) || 0), 0);
+        const entryImg = resolveImageSrc(row.token?.anprImageRef);
+        const topImg = resolveImageSrc(row.token?.loadImageRef);
+
+        return (
+          <div className="print:hidden border border-blue-300 bg-blue-50/50 rounded-md text-xs text-blue-950">
+            <div className="px-4 py-2 border-b border-blue-300 bg-blue-100/70 font-semibold text-sm rounded-t-md">
+              Internal Details (not printed on bill)
+            </div>
+
+            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Weights & Quantity */}
+              <div className="border border-blue-200 bg-white rounded-md p-3">
+                <div className="font-semibold mb-2 text-blue-900">Weight & Quantity</div>
+                <table className="w-full text-xs">
+                  <tbody>
+                    <tr><td className="py-0.5">Item</td><td className="text-right font-medium">{row.item?.name}</td></tr>
+                    <tr><td className="py-0.5">Vehicle No</td><td className="text-right font-medium">{row.vehicleNo}</td></tr>
+                    <tr><td className="py-0.5">Empty Weight</td><td className="text-right tabular-nums">{realEmpty.toFixed(3)} T</td></tr>
+                    <tr><td className="py-0.5">Gross Weight</td><td className="text-right tabular-nums">{realGross.toFixed(3)} T</td></tr>
+                    <tr className="border-t border-blue-200">
+                      <td className="py-0.5 font-semibold">Actual Net Weight</td>
+                      <td className="text-right tabular-nums font-semibold">{realNet.toFixed(3)} T</td>
+                    </tr>
+                    {isNonGstDisplay && (
+                      <tr className="text-muted-foreground">
+                        <td className="py-0.5">Printed (halved) Qty</td>
+                        <td className="text-right tabular-nums">{fmtNum(row.netWeight)} T</td>
+                      </tr>
+                    )}
+                    <tr><td className="py-0.5">Rate</td><td className="text-right tabular-nums">{fmtMoney(row.rate)} / T</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Amounts */}
+              <div className="border border-blue-200 bg-white rounded-md p-3">
+                <div className="font-semibold mb-2 text-blue-900">Actual Amounts</div>
+                <table className="w-full text-xs">
+                  <tbody>
+                    <tr><td className="py-0.5">Taxable</td><td className="text-right tabular-nums">{fmtMoney(realTaxable)}</td></tr>
+                    <tr><td className="py-0.5">CGST</td><td className="text-right tabular-nums">{fmtMoney(realCgst)}</td></tr>
+                    <tr><td className="py-0.5">SGST</td><td className="text-right tabular-nums">{fmtMoney(realSgst)}</td></tr>
+                    {realIgst > 0 && (
+                      <tr><td className="py-0.5">IGST</td><td className="text-right tabular-nums">{fmtMoney(realIgst)}</td></tr>
+                    )}
+                    <tr><td className="py-0.5">Round Off</td><td className="text-right tabular-nums">{fmtMoney(row.roundOff)}</td></tr>
+                    <tr className="border-t border-blue-200">
+                      <td className="py-0.5 font-semibold">Net Amount</td>
+                      <td className="text-right tabular-nums font-semibold">{fmtMoney(realTotal)}</td>
+                    </tr>
+                    {isNonGstDisplay && (
+                      <tr className="text-muted-foreground">
+                        <td className="py-0.5">Printed (halved) Net</td>
+                        <td className="text-right tabular-nums">{fmtMoney(row.totalAmount)}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Payment */}
+              <div className="border border-blue-200 bg-white rounded-md p-3">
+                <div className="font-semibold mb-2 text-blue-900">Payment</div>
+                <table className="w-full text-xs">
+                  <tbody>
+                    <tr><td className="py-0.5">Mode</td><td className="text-right font-medium">{row.paymentMode}</td></tr>
+                    {cash > 0 && <tr><td className="py-0.5">Cash Received</td><td className="text-right tabular-nums">{fmtMoney(cash)}</td></tr>}
+                    {online > 0 && <tr><td className="py-0.5">Online Received</td><td className="text-right tabular-nums">{fmtMoney(online)}</td></tr>}
+                    {credit > 0 && <tr><td className="py-0.5">On Credit</td><td className="text-right tabular-nums">{fmtMoney(credit)}</td></tr>}
+                    <tr className="border-t border-blue-200">
+                      <td className="py-0.5 font-semibold">Total Paid</td>
+                      <td className="text-right tabular-nums font-semibold">{fmtMoney(paid)}</td>
+                    </tr>
+                    {balance > 0.005 && (
+                      <tr className="text-red-700">
+                        <td className="py-0.5 font-bold">Balance Due</td>
+                        <td className="text-right tabular-nums font-bold">{fmtMoney(balance)}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Denominations */}
+              <div className="border border-blue-200 bg-white rounded-md p-3">
+                <div className="font-semibold mb-2 text-blue-900">Cash Denominations</div>
+                {denoms.length === 0 ? (
+                  <div className="text-muted-foreground italic">No denomination breakdown captured.</div>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-blue-200 text-blue-900">
+                        <th className="text-left py-1">Denomination</th>
+                        <th className="text-right py-1">Nos</th>
+                        <th className="text-right py-1">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {denoms.map((d, i) => (
+                        <tr key={i}>
+                          <td className="py-0.5 tabular-nums">₹ {Number(d.denomination)}</td>
+                          <td className="text-right py-0.5 tabular-nums">{Number(d.nos)}</td>
+                          <td className="text-right py-0.5 tabular-nums">{fmtMoney(Number(d.amount) || Number(d.denomination) * Number(d.nos))}</td>
+                        </tr>
+                      ))}
+                      <tr className="border-t border-blue-200 font-semibold">
+                        <td className="py-1" colSpan={2}>Total</td>
+                        <td className="text-right py-1 tabular-nums">{fmtMoney(denomTotal)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+
+            {/* Entry images */}
+            {(entryImg || topImg) && (
+              <div className="px-4 pb-4">
+                <div className="font-semibold mb-2 text-blue-900">Entry Images</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {entryImg && (
+                    <figure className="border border-blue-200 bg-white rounded-md overflow-hidden">
+                      <img src={entryImg} alt="ANPR / Entry" className="w-full h-56 object-contain bg-gray-50" />
+                      <figcaption className="px-2 py-1 text-[11px] text-blue-900 bg-blue-50 border-t border-blue-200">
+                        ANPR / Entry {row.token?.anprNumberPlateText ? `— ${row.token.anprNumberPlateText}` : ''}
+                      </figcaption>
+                    </figure>
+                  )}
+                  {topImg && (
+                    <figure className="border border-blue-200 bg-white rounded-md overflow-hidden">
+                      <img src={topImg} alt="Top / Load" className="w-full h-56 object-contain bg-gray-50" />
+                      <figcaption className="px-2 py-1 text-[11px] text-blue-900 bg-blue-50 border-t border-blue-200">
+                        Top / Load image
+                      </figcaption>
+                    </figure>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Cancel modal */}
       {showCancel && (

@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Calendar, Loader2 } from 'lucide-react';
+import { Calendar, Loader2, Download, Printer } from 'lucide-react';
 import { salesBillApi, type SalesBillRow } from '../services/operationsApi';
 import { customersApi, describeError, type CustomerRow } from '../services/mastersApi';
 import { SearchableDropdown, type SearchableDropdownOption } from '../components/ui/searchable-dropdown';
+import { downloadReportCSV, printReport, inr, fmtDateISO, isNumericHeader, type ReportColumn, currentMonthStart, currentMonthEnd } from '../utils/reportExport';
 
 const fmt = (n: string | number) => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('en-IN');
 
 export const CustomerLedger = () => {
   const [customerId, setCustomerId] = useState('');
-  const [dateFrom, setDateFrom] = useState('2026-03-01');
-  const [dateTo, setDateTo] = useState('2026-03-31');
+  const [dateFrom, setDateFrom] = useState(currentMonthStart());
+  const [dateTo, setDateTo] = useState(currentMonthEnd());
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [bills, setBills] = useState<SalesBillRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -40,11 +41,41 @@ export const CustomerLedger = () => {
     ...customers.map(c => ({ value: c.id, label: c.name, description: c.code })),
   ];
 
+  const columns: ReportColumn<SalesBillRow>[] = [
+    { header: 'Date', value: b => fmtDateISO(b.billDate) },
+    { header: 'Bill No', value: b => b.billNo },
+    { header: 'Token', value: b => b.token?.tokenNo ?? '' },
+    { header: 'Item', value: b => b.item.name },
+    { header: 'Vehicle', value: b => b.vehicleNo },
+    { header: 'Net Wt (T)', value: b => Number(b.netWeight).toFixed(2), align: 'right' },
+    { header: 'Rate', value: b => inr(b.rate), align: 'right' },
+    { header: 'Taxable', value: b => inr(b.taxableAmount), align: 'right' },
+    { header: 'GST', value: b => inr(Number(b.cgstAmount) + Number(b.sgstAmount) + Number(b.igstAmount)), align: 'right' },
+    { header: 'Total', value: b => inr(b.totalAmount), align: 'right' },
+    { header: 'Mode', value: b => b.paymentMode },
+  ];
+  const meta = () => ({
+    title: 'Customer Ledger',
+    subtitle: [
+      selectedCustomer ? `Customer: ${selectedCustomer.name} (${selectedCustomer.code})` : '',
+      `From ${fmtDateISO(dateFrom)} to ${fmtDateISO(dateTo)}`,
+    ].filter(Boolean) as string[],
+    totals: ['', '', '', '', '', '', '', '', 'TOTAL', inr(totalDebit), ''],
+  });
+  const handleDownload = () => downloadReportCSV(bills, columns, meta());
+  const handlePrint = () => printReport(bills, columns, meta());
+
   return (
     <div className="p-6">
-      <div className="mb-4 pb-3 border-b border-gray-300">
-        <h1 className="text-xl font-bold text-gray-900">Customer Ledger</h1>
-        <p className="text-sm text-gray-500">Sales bills ledger by customer from DB</p>
+      <div className="mb-4 pb-3 border-b border-gray-300 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Customer Ledger</h1>
+          <p className="text-sm text-gray-500">Sales bills ledger by customer from DB</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleDownload} disabled={!bills.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
+          <button onClick={handlePrint} disabled={!bills.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
+        </div>
       </div>
       <div className="bg-white rounded-lg border border-gray-300 p-4 mb-4">
         <div className="grid grid-cols-4 gap-3">
@@ -81,7 +112,7 @@ export const CustomerLedger = () => {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-300">
-                  <tr>{['Date','Bill No','Token','Item','Vehicle','Net Wt (T)','Rate','Taxable','GST','Total','Mode'].map(h=><th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-600 whitespace-nowrap">{h}</th>)}</tr>
+                  <tr>{['Date','Bill No','Token','Item','Vehicle','Net Wt (T)','Rate','Taxable','GST','Total','Mode'].map(h=>{ const r = isNumericHeader(h); return <th key={h} className={`px-3 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap ${r?'text-right':'text-left'}`}>{h}</th>; })}</tr>
                 </thead>
                 <tbody>
                   {bills.length === 0 ? <tr><td colSpan={11} className="px-3 py-8 text-center text-gray-400">No bills found for selected period</td></tr>

@@ -3,13 +3,31 @@ import { Calendar, Download, Printer, Loader2 } from 'lucide-react';
 import { salesBillApi, type SalesBillRow } from '../services/operationsApi';
 import { customersApi, itemsApi, describeError, type CustomerRow, type ItemRow } from '../services/mastersApi';
 import { SearchableDropdown, type SearchableDropdownOption } from '../components/ui/searchable-dropdown';
+import { downloadReportCSV, printReport, fmtDateISO, currentMonthStart, currentMonthEnd, isNumericHeader } from '../utils/reportExport';
+import {
+  SALES_REPORT_36_HEADERS,
+  SALES_REPORT_36_COLSPAN,
+  buildSalesReport36Columns,
+  renderSalesReport36Row,
+  type SalesReport36Display,
+} from '../utils/salesReport36';
 
 const fmt = (n: string | number) => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('en-IN');
+
+// Full-quantity report — always shows stored values directly, no NON_GST doubling.
+const displayFor = (b: SalesBillRow): SalesReport36Display => {
+  const netWeight = Number(b.netWeight);
+  const taxable = Number(b.taxableAmount);
+  const total = Number(b.totalAmount);
+  const paid = Number(b.cashAmount) + Number(b.onlineAmount);
+  const credit = Number(b.creditAmount);
+  const remaining = Math.max(0, +(total - paid - credit).toFixed(2));
+  return { netWeight, taxable, total, paid, remaining };
+};
 
 export const SalesWithGSTFullQty = () => {
-  const [dateFrom, setDateFrom] = useState('2026-03-01');
-  const [dateTo, setDateTo] = useState('2026-03-31');
+  const [dateFrom, setDateFrom] = useState(currentMonthStart());
+  const [dateTo, setDateTo] = useState(currentMonthEnd());
   const [customerId, setCustomerId] = useState('');
   const [itemId, setItemId] = useState('');
   const [allBills, setAllBills] = useState<SalesBillRow[]>([]);
@@ -36,17 +54,44 @@ export const SalesWithGSTFullQty = () => {
 
   useEffect(() => { void load(); }, [dateFrom, dateTo, customerId, itemId]);
 
-  const bills = useMemo(() => allBills.filter((b) => b.customer.billType === 'TAX_INVOICE'), [allBills]);
+  // "With GST" = any bill that carries GST on the invoice, regardless of
+  // customer's default billType (covers TAX_INVOICE customers and any
+  // NON_GST customer where billTypeOverride applied GST).
+  const bills = useMemo(
+    () => allBills.filter((b) =>
+      Number(b.cgstAmount) > 0
+      || Number(b.sgstAmount) > 0
+      || Number(b.igstAmount) > 0,
+    ),
+    [allBills],
+  );
 
-  const totals = useMemo(() => bills.reduce((a, b) => ({
-    netWeight: a.netWeight + Number(b.netWeight),
-    taxable: a.taxable + Number(b.taxableAmount),
-    gst: a.gst + Number(b.cgstAmount) + Number(b.sgstAmount) + Number(b.igstAmount),
-    total: a.total + Number(b.totalAmount),
-  }), { netWeight: 0, taxable: 0, gst: 0, total: 0 }), [bills]);
+  const totals = useMemo(() => bills.reduce((a, b) => {
+    const d = displayFor(b);
+    return {
+      netWeight: a.netWeight + d.netWeight,
+      taxable: a.taxable + d.taxable,
+      gst: a.gst + Number(b.cgstAmount) + Number(b.sgstAmount) + Number(b.igstAmount),
+      total: a.total + d.total,
+      paid: a.paid + d.paid,
+      remaining: a.remaining + d.remaining,
+    };
+  }, { netWeight: 0, taxable: 0, gst: 0, total: 0, paid: 0, remaining: 0 }), [bills]);
 
   const custOpts: SearchableDropdownOption[] = [{ value: '', label: 'All Customers' }, ...customers.map(c => ({ value: c.id, label: c.name }))];
   const itemOpts: SearchableDropdownOption[] = [{ value: '', label: 'All Items' }, ...items.filter(i => i.isSaleMaterial).map(i => ({ value: i.id, label: i.name }))];
+
+  const columns = useMemo(() => buildSalesReport36Columns(displayFor), [bills]);
+  const meta = () => ({
+    title: 'Sales With GST (Full Qty)',
+    subtitle: [
+      `From ${fmtDateISO(dateFrom)} to ${fmtDateISO(dateTo)}`,
+      customerId ? `Customer: ${customers.find(c => c.id === customerId)?.name ?? ''}` : 'All Customers',
+      itemId ? `Item: ${items.find(i => i.id === itemId)?.name ?? ''}` : 'All Items',
+    ],
+  });
+  const handleDownload = () => downloadReportCSV(bills, columns, meta());
+  const handlePrint = () => printReport(bills, columns, meta());
 
   return (
     <div className="p-6">
@@ -56,8 +101,8 @@ export const SalesWithGSTFullQty = () => {
           <p className="text-sm text-gray-500">TAX_INVOICE sales bills from DB</p>
         </div>
         <div className="flex gap-2">
-          <button className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
-          <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
+          <button onClick={handleDownload} disabled={!bills.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
+          <button onClick={handlePrint} disabled={!bills.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
         </div>
       </div>
       <div className="bg-white rounded-lg border border-gray-300 p-4 mb-4">
@@ -90,38 +135,26 @@ export const SalesWithGSTFullQty = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-300">
-                <tr>{['Bill No','Date','Customer','Item','Vehicle','Net Wt (T)','Rate','Taxable','CGST','SGST','IGST','Total','Mode'].map(h=><th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-600 whitespace-nowrap">{h}</th>)}</tr>
+                <tr>{SALES_REPORT_36_HEADERS.map(h=>{const r=isNumericHeader(h);return <th key={h} className={`px-2 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap ${r?'text-right':'text-left'}`}>{h}</th>;})}</tr>
               </thead>
               <tbody>
-                {bills.length === 0 ? <tr><td colSpan={14} className="px-3 py-8 text-center text-gray-400">No records found</td></tr>
-                : bills.map(b=>(
+                {bills.length === 0 ? <tr><td colSpan={SALES_REPORT_36_COLSPAN} className="px-3 py-8 text-center text-gray-400">No records found</td></tr>
+                : bills.map((b, i) => (
                   <tr key={b.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="px-3 py-2 font-medium text-blue-600">{b.billNo}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">{fmtDate(b.billDate)}</td>
-                    <td className="px-3 py-2 max-w-32 truncate">{b.customer.name}</td>
-                    <td className="px-3 py-2 max-w-28 truncate">{b.item.name}</td>
-                    <td className="px-3 py-2">{b.vehicleNo}</td>
-                    <td className="px-3 py-2 text-right">{Number(b.netWeight).toFixed(2)}</td>
-                    <td className="px-3 py-2 text-right">₹{fmt(b.rate)}</td>
-                    
-                    <td className="px-3 py-2 text-right">₹{fmt(b.taxableAmount)}</td>
-                    <td className="px-3 py-2 text-right">{Number(b.cgstAmount)>0?'₹'+fmt(b.cgstAmount):'—'}</td>
-                    <td className="px-3 py-2 text-right">{Number(b.sgstAmount)>0?'₹'+fmt(b.sgstAmount):'—'}</td>
-                    <td className="px-3 py-2 text-right">{Number(b.igstAmount)>0?'₹'+fmt(b.igstAmount):'—'}</td>
-                    <td className="px-3 py-2 text-right font-semibold">₹{fmt(b.totalAmount)}</td>
-                    <td className="px-3 py-2">{b.paymentMode}</td>
+                    {renderSalesReport36Row(b, i + 1, displayFor)}
                   </tr>
                 ))}
               </tbody>
               {bills.length > 0 && (
                 <tfoot className="bg-gray-50 border-t-2 border-gray-300 font-semibold text-xs">
                   <tr>
-                    <td colSpan={7} className="px-3 py-2 text-right text-gray-600">TOTALS</td>
-                    <td className="px-3 py-2 text-right">₹{fmt(totals.taxable)}</td>
-                    <td colSpan={2} className="px-3 py-2 text-right">₹{fmt(totals.gst)}</td>
-                    <td></td>
-                    <td className="px-3 py-2 text-right">₹{fmt(totals.total)}</td>
-                    <td></td>
+                    <td colSpan={12} className="px-2 py-2 text-right text-gray-600">TOTALS</td>
+                    <td className="px-2 py-2 text-right">{totals.netWeight.toFixed(2)}</td>
+                    <td className="px-2 py-2 text-right">₹{fmt(totals.taxable)}</td>
+                    <td className="px-2 py-2 text-right">₹{fmt(totals.total)}</td>
+                    <td colSpan={11}></td>
+                    <td className="px-2 py-2 text-right text-green-700">₹{fmt(totals.paid)}</td>
+                    <td colSpan={10}></td>
                   </tr>
                 </tfoot>
               )}

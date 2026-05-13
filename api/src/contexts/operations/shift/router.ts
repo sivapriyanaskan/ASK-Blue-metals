@@ -3,9 +3,11 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../infra/db.js';
 import { asyncHandler, validate } from '../../../infra/validation.js';
-import { requireAuth } from '../../iam/auth.middleware.js';
+import { requireAuth, requirePermissions } from '../../iam/auth.middleware.js';
 import { auditService } from '../../audit/audit.service.js';
 import { actorContextFromRequest } from '../../masters/_common.js';
+import { Permissions } from '../../iam/permissions.js';
+import { runMidnightShiftClose } from './auto-close.js';
 
 const DenomDetail = z.object({
   denomination: z.number().int().positive(),
@@ -18,6 +20,8 @@ const ListQuery = z.object({
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
   search: z.string().trim().min(1).optional(),
+  openedById: z.string().min(1).optional(),
+  mine: z.coerce.boolean().optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -169,8 +173,10 @@ function withTotals<T extends { openedAt: Date; closedAt: Date | null }>(
 
 router.get('/', validate('query', ListQuery), asyncHandler(async (req, res) => {
   const q = req.query as unknown as z.infer<typeof ListQuery>;
+  const effectiveOpenedById = q.mine ? req.user?.id : q.openedById;
   const where: Prisma.ShiftWhereInput = {
     ...(q.status ? { status: q.status } : {}),
+    ...(effectiveOpenedById ? { openedById: effectiveOpenedById } : {}),
     ...(q.search
       ? {
           OR: [
@@ -391,5 +397,16 @@ router.post('/:id/close', validate('params', IdParam), validate('body', Close), 
   await auditService.record({ ...actor, action: 'CLOSE', resource: 'Shift', resourceId: shift.id, changes: body });
   res.json(updated);
 }));
+
+// Manual trigger for the midnight auto-close. Admin only. Useful for ops
+// and for verifying the workflow without waiting for IST midnight.
+router.post(
+  '/auto-close/run',
+  requirePermissions(Permissions.SYSTEM_SETTINGS_MANAGE),
+  asyncHandler(async (_req, res) => {
+    const result = await runMidnightShiftClose();
+    res.json(result);
+  }),
+);
 
 export const shiftRouter = router;

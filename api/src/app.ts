@@ -156,6 +156,7 @@ export function createApp() {
   api.use('/operations/purchase-entry-passes', operations.purchaseEntryPasses);
   api.use('/operations/purchase-bills', operations.purchaseBills);
   api.use('/operations/shifts', operations.shifts);
+  api.use('/operations/shifts', operations.shiftReports);
   api.use('/finance/currency-exchanges', operations.currencyExchanges);
   api.use('/finance/cash-vouchers', operations.cashVouchers);
   api.use('/fuel/consumptions', operations.fuelConsumptions);
