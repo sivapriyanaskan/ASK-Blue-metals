@@ -1,39 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { LockKeyhole, Printer, Search, AlertTriangle } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router';
+import { LockKeyhole, Printer, Search } from 'lucide-react';
 import { SearchableDropdown, SearchableDropdownOption } from '../components/ui/searchable-dropdown';
-import { shiftApi, purchaseConsumptionApi, type ShiftRow, type ShiftDenomination } from '../services/operationsApi';
+import { shiftApi, type ShiftRow, type ShiftDenomination } from '../services/operationsApi';
 import { usersApi, type UserRow } from '../services/iamApi';
 import { describeError } from '../services/mastersApi';
-import { AdminActiveShiftsPanel } from '../components/AdminActiveShiftsPanel';
 
 // Fallback staff list (used while users are loading)
 const mockStaffUsers: { id: string; name: string; role: string }[] = [];
 
 export const ShiftClosing = () => {
-  const { user } = useAppContext();
-  const [searchParams] = useSearchParams();
-  // Admin can pass ?shiftId=... to close another user's shift.
-  const targetShiftId = searchParams.get('shiftId');
-  const isAdmin = user.role === 'Admin';
-
-  // When an Admin lands on this page without selecting a specific shift,
-  // show the active-shifts picker instead of an "no open shift" error.
-  if (isAdmin && !targetShiftId) {
-    return (
-      <AdminActiveShiftsPanel
-        title="Shift Close"
-        subtitle="Select an operator's shift to view details and close on their behalf"
-        actionLabel="View / Close"
-      />
-    );
-  }
-  return <ShiftClosingForm targetShiftId={targetShiftId} />;
-};
-
-const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) => {
-  const { user, shiftStatus, refreshShiftStatus } = useAppContext();
+  const { user, shiftStatus, setShiftStatus } = useAppContext();
   const [formData, setFormData] = useState({
     entryDate: new Date().toISOString().split('T')[0],
     entryTime: new Date().toTimeString().slice(0, 5),
@@ -70,38 +47,20 @@ const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) =
   const [users, setUsers] = useState<UserRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [blockingCount, setBlockingCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        // If admin opened this page with ?shiftId=..., load that specific
-        // shift; otherwise load the current user's own active shift.
-        const open: ShiftRow | null = targetShiftId
-          ? await shiftApi.get(targetShiftId).catch(() => null)
-          : (await shiftApi.list({ status: 'OPEN', mine: true, pageSize: 1 })).items[0] ?? null;
+        const [shifts, userRes] = await Promise.all([
+          shiftApi.list({ status: 'OPEN', pageSize: 1 }),
+          usersApi.list({ pageSize: 100 }),
+        ]);
         if (cancelled) return;
+        const open = shifts.items[0] ?? null;
         setActiveShift(open);
-        // Users list is optional — only Admin/Supervisor have iam.user.view.
-        // For Billing Staff and other roles, silently skip the dropdown data.
-        usersApi
-          .list({ pageSize: 100 })
-          .then((userRes) => {
-            if (!cancelled) setUsers(userRes.items.filter((u) => u.status === 'ACTIVE'));
-          })
-          .catch(() => {
-            /* permission denied or transient — staff dropdown stays empty */
-          });
+        setUsers(userRes.items.filter((u) => u.status === 'ACTIVE'));
         if (open) {
-          // Fetch count of NEW purchase consumption rows tied to this shift —
-          // these block the close unless the user is strictly entry-way only.
-          try {
-            const block = await purchaseConsumptionApi.blocking(open.id);
-            if (!cancelled) setBlockingCount(block.count);
-          } catch {
-            /* non-fatal */
-          }
           setFormData((prev) => ({
             ...prev,
             entryDate: new Date(open.shiftDate).toISOString().slice(0, 10),
@@ -133,9 +92,7 @@ const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) =
             });
           }
         } else {
-          setLoadError(targetShiftId
-            ? 'Shift not found or already closed.'
-            : 'No open shift found. Please open a shift first.');
+          setLoadError('No open shift found. Please open a shift first.');
         }
       } catch (err) {
         if (!cancelled) setLoadError(describeError(err, 'Failed to load active shift'));
@@ -144,7 +101,7 @@ const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) =
     return () => {
       cancelled = true;
     };
-  }, [targetShiftId]);
+  }, []);
 
   // Dropdown options for staff
   const staffOptions: SearchableDropdownOption[] = users.map((u) => ({
@@ -174,12 +131,6 @@ const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) =
   // Closing Amount = current cash on hand minus what is being transferred to next shift.
   const closingAmount = cashInHand - transferDenominationTotal;
 
-  // Block close while purchase entries are still in NEW status — unless the
-  // user is strictly an entry-way operator (WEIGHBRIDGE_OPERATOR only).
-  const userRoles = user.roleCodes ?? [];
-  const isEntryWayOnly = userRoles.length > 0 && userRoles.every((r) => r === 'WEIGHBRIDGE_OPERATOR');
-  const isCloseBlocked = !isEntryWayOnly && blockingCount > 0;
-
   const handleDenominationChange = (denom: string, count: number) => {
     const newDenominations = { ...denominations, [denom]: count };
     setDenominations(newDenominations);
@@ -193,10 +144,6 @@ const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) =
   const handleCloseShift = async () => {
     if (!activeShift) {
       alert('No open shift to close');
-      return;
-    }
-    if (isCloseBlocked) {
-      alert(`Cannot close shift: ${blockingCount} purchase entry(ies) are still in NEW status. Classify them on Raw Material — Purchase Wise first.`);
       return;
     }
     setSaving(true);
@@ -223,13 +170,8 @@ const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) =
         transferDenominations: transferDenoms,
       });
       setIsClosed(true);
-      await refreshShiftStatus();
-      try {
-        await shiftApi.downloadReport(activeShift.id);
-      } catch (reportErr) {
-        console.error('Failed to download shift report', reportErr);
-      }
-      alert('Shift closed successfully! Report downloaded.');
+      setShiftStatus({ ...shiftStatus, isOpen: false });
+      alert('Shift closed successfully! Report generated.');
     } catch (err) {
       alert(describeError(err, 'Failed to close shift'));
     } finally {
@@ -292,7 +234,7 @@ const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) =
               </label>
               <input
                 type="text"
-                value={activeShift?.openedBySnapshot || user.name}
+                value={user.name}
                 readOnly
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 cursor-not-allowed"
               />
@@ -500,37 +442,15 @@ const ShiftClosingForm = ({ targetShiftId }: { targetShiftId: string | null }) =
           </div>
 
           {/* Action Buttons */}
-          <div className="mt-6 pt-6 border-t space-y-3">
-            {isCloseBlocked && (
-              <div className="flex items-center justify-between gap-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3">
-                <div className="flex items-start gap-2 text-sm text-red-800">
-                  <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0" />
-                  <div>
-                    <div className="font-semibold">Cannot close shift</div>
-                    <div>
-                      {blockingCount} purchase entr{blockingCount === 1 ? 'y is' : 'ies are'} still in <strong>NEW</strong> status. Mark them Consumed, In Stock, or Undefined first.
-                    </div>
-                  </div>
-                </div>
-                <Link
-                  to="/production/purchase-wise"
-                  className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-                >
-                  Go to Raw Material
-                </Link>
-              </div>
-            )}
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={handleCloseShift}
-                disabled={saving || !activeShift || isCloseBlocked}
-                className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                title={isCloseBlocked ? 'Resolve NEW purchase entries before closing' : undefined}
-              >
-                <LockKeyhole className="w-5 h-5" />
-                {saving ? 'Closing…' : 'Close Shift & Lock Transactions'}
-              </button>
-            </div>
+          <div className="mt-6 pt-6 border-t flex gap-3 justify-end">
+            <button
+              onClick={handleCloseShift}
+              disabled={saving || !activeShift}
+              className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-60"
+            >
+              <LockKeyhole className="w-5 h-5" />
+              {saving ? 'Closing…' : 'Close Shift & Lock Transactions'}
+            </button>
           </div>
         </div>
       ) : (

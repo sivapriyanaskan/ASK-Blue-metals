@@ -10,35 +10,14 @@ import type { UserRole } from '../context/AppContext';
  * without a sweeping refactor.
  */
 const ROLE_CODE_TO_LABEL: Record<string, UserRole> = {
-  SUPER_ADMIN: 'Super Admin',
   ADMIN: 'Admin',
   WEIGHBRIDGE_OPERATOR: 'Operator',
   BILLING_STAFF: 'Billing Staff',
   SUPERVISOR: 'Supervisor',
   ACCOUNTS: 'Accounts',
-  INVOICE_BILLING: 'Invoice Billing',
 };
 
-const LABEL_PRIORITY: UserRole[] = ['Super Admin', 'Admin', 'Supervisor', 'Billing Staff', 'Accounts', 'Invoice Billing', 'Operator'];
-
-/**
- * Role codes that should only be visible/assignable by a Super Admin.
- * Admin (non-super) must NOT see or manage these.
- */
-export const SUPER_ADMIN_ONLY_ROLE_CODES = new Set<string>(['INVOICE_BILLING', 'SUPER_ADMIN']);
-
-/** True if the currently signed-in user has Super Admin privileges. */
-export function isSuperAdmin(roleCodes: readonly string[] | undefined | null): boolean {
-  if (!roleCodes) return false;
-  return roleCodes.includes('SUPER_ADMIN');
-}
-
-/** True if the currently signed-in user is restricted to GST tax-invoice billing only. */
-export function isInvoiceBillingOnly(roleCodes: readonly string[] | undefined | null): boolean {
-  if (!roleCodes || roleCodes.length === 0) return false;
-  if (isSuperAdmin(roleCodes)) return false;
-  return roleCodes.includes('INVOICE_BILLING');
-}
+const LABEL_PRIORITY: UserRole[] = ['Admin', 'Supervisor', 'Billing Staff', 'Accounts', 'Operator'];
 
 /**
  * Picks the highest-priority display role from a list of backend role codes.
@@ -59,4 +38,15 @@ export function pickPrimaryRole(roleCodes: readonly string[]): UserRole {
 export function buildDisplayName(firstName?: string, lastName?: string, username?: string): string {
   const full = [firstName, lastName].filter(Boolean).join(' ').trim();
   return full || username || 'User';
+}
+
+/**
+ * True when the user is a Billing Staff member without elevated roles.
+ * Used to restrict report views to invoice-only columns/totals.
+ */
+export function isInvoiceBillingOnly(roleCodes: readonly string[] | undefined | null): boolean {
+  if (!roleCodes || roleCodes.length === 0) return false;
+  const elevated = ['ADMIN', 'SUPER_ADMIN', 'SUPERVISOR', 'ACCOUNTS'];
+  if (roleCodes.some((c) => elevated.includes(c))) return false;
+  return roleCodes.includes('BILLING_STAFF');
 }

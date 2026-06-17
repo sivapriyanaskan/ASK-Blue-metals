@@ -3,11 +3,9 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../infra/db.js';
 import { asyncHandler, validate } from '../../../infra/validation.js';
-import { requireAuth, requirePermissions } from '../../iam/auth.middleware.js';
+import { requireAuth } from '../../iam/auth.middleware.js';
 import { auditService } from '../../audit/audit.service.js';
 import { actorContextFromRequest } from '../../masters/_common.js';
-import { Permissions } from '../../iam/permissions.js';
-import { runMidnightShiftClose } from './auto-close.js';
 
 const DenomDetail = z.object({
   denomination: z.number().int().positive(),
@@ -20,8 +18,6 @@ const ListQuery = z.object({
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
   search: z.string().trim().min(1).optional(),
-  openedById: z.string().min(1).optional(),
-  mine: z.coerce.boolean().optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -173,10 +169,8 @@ function withTotals<T extends { openedAt: Date; closedAt: Date | null }>(
 
 router.get('/', validate('query', ListQuery), asyncHandler(async (req, res) => {
   const q = req.query as unknown as z.infer<typeof ListQuery>;
-  const effectiveOpenedById = q.mine ? req.user?.id : q.openedById;
   const where: Prisma.ShiftWhereInput = {
     ...(q.status ? { status: q.status } : {}),
-    ...(effectiveOpenedById ? { openedById: effectiveOpenedById } : {}),
     ...(q.search
       ? {
           OR: [
@@ -339,41 +333,6 @@ router.post('/:id/close', validate('params', IdParam), validate('body', Close), 
   if (!shift) return res.status(404).json({ message: 'Not found' });
   if (shift.status !== 'OPEN') return res.status(422).json({ message: 'Shift is not OPEN' });
 
-  // #34 \u2014 hard block: cannot close the sales/cash shift while production
-  // entries tied to it are still in SAVED state. Production must be closed
-  // (all RawMaterialEntry rows for this shift must be POSTED or CANCELLED)
-  // before the shift itself can be closed.
-  const pendingProduction = await prisma.rawMaterialEntry.count({
-    where: { shiftId: shift.id, status: 'SAVED' },
-  });
-  if (pendingProduction > 0) {
-    return res.status(422).json({
-      message: `Cannot close shift: ${pendingProduction} production entry(ies) are still in SAVED status. Close production first.`,
-      code: 'PRODUCTION_NOT_CLOSED',
-      pendingProduction,
-    });
-  }
-
-  // Block close while any purchase consumption row tied to this shift is
-  // still NEW. Entry-way users (strictly WEIGHBRIDGE_OPERATOR — no billing /
-  // admin role) are exempt: they only create bills, they don't classify them.
-  const userRoles = req.user?.roles ?? [];
-  const isEntryWayOnly =
-    userRoles.length > 0 &&
-    userRoles.every((r) => r === 'WEIGHBRIDGE_OPERATOR');
-  if (!isEntryWayOnly) {
-    const pendingConsumption = await prisma.purchaseConsumption.count({
-      where: { createdByShiftId: shift.id, status: 'NEW' },
-    });
-    if (pendingConsumption > 0) {
-      return res.status(422).json({
-        message: `Cannot close shift: ${pendingConsumption} purchase entry(ies) are still in NEW status. Mark them Consumed, In Stock, or Undefined from Raw Material — Purchase Wise.`,
-        code: 'PURCHASE_CONSUMPTION_NOT_CLASSIFIED',
-        pendingConsumption,
-      });
-    }
-  }
-
   const body = req.body as z.infer<typeof Close>;
   const updated = await prisma.shift.update({
     where: { id: req.params.id },
@@ -397,16 +356,5 @@ router.post('/:id/close', validate('params', IdParam), validate('body', Close), 
   await auditService.record({ ...actor, action: 'CLOSE', resource: 'Shift', resourceId: shift.id, changes: body });
   res.json(updated);
 }));
-
-// Manual trigger for the midnight auto-close. Admin only. Useful for ops
-// and for verifying the workflow without waiting for IST midnight.
-router.post(
-  '/auto-close/run',
-  requirePermissions(Permissions.SYSTEM_SETTINGS_MANAGE),
-  asyncHandler(async (_req, res) => {
-    const result = await runMidnightShiftClose();
-    res.json(result);
-  }),
-);
 
 export const shiftRouter = router;

@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search, Eye, Edit, Trash2, Save, ArrowLeft, Loader2, X, Wand2 } from 'lucide-react';
+import { Plus, Search, Eye, Edit, Trash2, Save, ArrowLeft, Loader2, X } from 'lucide-react';
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import {
   suppliersApi,
-  supplierGstLookup,
   accountsApi,
   describeError,
   type SupplierRow,
@@ -15,9 +14,9 @@ import {
 type Mode = 'list' | 'create' | 'edit' | 'view';
 
 interface FormState {
+  code: string;
   name: string;
   address: string;
-  state: string;
   supplierType: 'TON_BASED' | 'REPAIR_MAINTENANCE';
   controlAccountId: string;
   gstNumber: string;
@@ -29,9 +28,9 @@ interface FormState {
 }
 
 const empty: FormState = {
+  code: '',
   name: '',
   address: '',
-  state: '',
   supplierType: 'TON_BASED',
   controlAccountId: '',
   gstNumber: '',
@@ -53,7 +52,6 @@ export const SupplierMaster = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(empty);
   const [viewing, setViewing] = useState<SupplierRow | null>(null);
-  const [gstLoading, setGstLoading] = useState(false);
 
   useEffect(() => {
     accountsApi.list({ pageSize: 200, isActive: true }).then((r) => setAccounts(r.items)).catch(() => undefined);
@@ -92,9 +90,9 @@ export const SupplierMaster = () => {
     try {
       const s = await suppliersApi.get(id);
       setForm({
+        code: s.code,
         name: s.name,
         address: s.address ?? '',
-        state: s.state ?? '',
         supplierType: s.supplierType,
         controlAccountId: s.controlAccountId ?? '',
         gstNumber: s.gstNumber ?? '',
@@ -132,36 +130,31 @@ export const SupplierMaster = () => {
   };
 
   const handleSave = async () => {
-    if (!form.name.trim()) {
-      setError('Name is required.');
+    if (!form.code.trim() || !form.name.trim()) {
+      setError('Code and name are required.');
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      const normalizedVehicles = form.vehicles
-        .map((v) => ({
-          vehicleNumber: v.vehicleNumber.trim().toUpperCase(),
-          driverName: v.driverName?.trim() || undefined,
-          driverPhone: v.driverPhone?.trim() || undefined,
-        }))
-        .filter((v) => v.vehicleNumber);
-
       const payload: SupplierInput = {
+        code: form.code.trim().toUpperCase(),
         name: form.name.trim(),
         address: form.address.trim() || undefined,
-        state: form.state.trim() || undefined,
         supplierType: form.supplierType,
         controlAccountId: form.controlAccountId || undefined,
         gstNumber: form.gstNumber.trim() || undefined,
         contactPerson: form.contactPerson.trim() || undefined,
         phone: form.phone.trim() || undefined,
         email: form.email.trim() || undefined,
-        vehicles: normalizedVehicles,
+        vehicles: form.vehicles.length ? form.vehicles : undefined,
         isActive: form.isActive,
       };
       if (editingId) {
-        await suppliersApi.update(editingId, payload);
+        // Update endpoint does not accept vehicles array; strip it.
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { vehicles, code, ...patch } = payload;
+        await suppliersApi.update(editingId, patch);
       } else {
         await suppliersApi.create(payload);
       }
@@ -188,30 +181,6 @@ export const SupplierMaster = () => {
   const removeVehicle = (i: number) => setForm({ ...form, vehicles: form.vehicles.filter((_, idx) => idx !== i) });
   const setVehicle = (i: number, patch: Partial<SupplierVehicleInput>) =>
     setForm({ ...form, vehicles: form.vehicles.map((v, idx) => (idx === i ? { ...v, ...patch } : v)) });
-
-  const fetchFromGst = async () => {
-    const gstin = form.gstNumber.trim().toUpperCase();
-    if (!gstin) {
-      setError('Enter a GSTIN before fetching.');
-      return;
-    }
-    setError(null);
-    setGstLoading(true);
-    try {
-      const r = await supplierGstLookup(gstin);
-      setForm((f) => ({
-        ...f,
-        name: r.legalName || r.tradeName || f.name,
-        address: r.address || [r.area, r.city, r.state].filter(Boolean).join(', ') || f.address,
-        state: r.state || f.state,
-        gstNumber: gstin,
-      }));
-    } catch (err) {
-      setError(describeError(err, 'GST lookup failed'));
-    } finally {
-      setGstLoading(false);
-    }
-  };
 
   const accountOptions = [{ label: '— None —', value: '' }, ...accounts.map((a) => ({ label: `${a.code} - ${a.name}`, value: a.id }))];
   const accountName = (id?: string | null) => accounts.find((a) => a.id === id)?.name ?? '-';
@@ -291,7 +260,6 @@ export const SupplierMaster = () => {
             <Disp label="Name" value={viewing.name} />
             <Disp label="Type" value={viewing.supplierType} />
             <Disp label="Control Account" value={accountName(viewing.controlAccountId)} />
-            <Disp label="State" value={viewing.state ?? '-'} />
             <Disp label="GSTIN" value={viewing.gstNumber ?? '-'} />
             <Disp label="Contact Person" value={viewing.contactPerson ?? '-'} />
             <Disp label="Phone" value={viewing.phone ?? '-'} />
@@ -335,30 +303,9 @@ export const SupplierMaster = () => {
       <div className="max-w-4xl mx-auto bg-white rounded-lg border border-gray-300 p-6">
         <h3 className="font-semibold mb-4 pb-2 border-b border-gray-300">Identity</h3>
         <div className="grid grid-cols-2 gap-4 mb-6">
+          <Inp label="Code *" value={form.code} onChange={(v) => setForm({ ...form, code: v.toUpperCase() })} disabled={mode === 'edit'} />
           <Inp label="Name *" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">GSTIN</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={form.gstNumber}
-                onChange={(e) => setForm({ ...form, gstNumber: e.target.value.toUpperCase() })}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
-              />
-              <button
-                type="button"
-                onClick={fetchFromGst}
-                disabled={gstLoading || !form.gstNumber.trim()}
-                className="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 flex items-center gap-1 text-sm"
-                title="Fetch supplier details from GST portal"
-              >
-                {gstLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                Fetch
-              </button>
-            </div>
-          </div>
           <div className="col-span-2"><Txt label="Address" value={form.address} onChange={(v) => setForm({ ...form, address: v })} /></div>
-          <div><Inp label="State" value={form.state} onChange={() => undefined} disabled /></div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Supplier Type *</label>
             <SearchableDropdown
@@ -372,6 +319,7 @@ export const SupplierMaster = () => {
             <label className="block text-sm font-medium text-gray-700 mb-1">Control Account</label>
             <SearchableDropdown options={accountOptions} value={form.controlAccountId} onValueChange={(v) => setForm({ ...form, controlAccountId: v })} placeholder="Select account" />
           </div>
+          <Inp label="GSTIN" value={form.gstNumber} onChange={(v) => setForm({ ...form, gstNumber: v.toUpperCase() })} mono />
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Status *</label>
             <SearchableDropdown
@@ -390,23 +338,30 @@ export const SupplierMaster = () => {
           <Inp label="Email" value={form.email} onChange={(v) => setForm({ ...form, email: v })} />
         </div>
 
-        <h3 className="font-semibold mb-4 pb-2 border-b border-gray-300 flex items-center justify-between">
-          Vehicles
-          <button onClick={addVehicle} className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"><Plus className="w-3 h-3" /> Add</button>
-        </h3>
-        <div className="space-y-2 mb-6">
-          {form.vehicles.map((v, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-4"><Inp label="Vehicle No." value={v.vehicleNumber} onChange={(s) => setVehicle(i, { vehicleNumber: s.toUpperCase() })} mono /></div>
-              <div className="col-span-4"><Inp label="Driver Name" value={v.driverName ?? ''} onChange={(s) => setVehicle(i, { driverName: s })} /></div>
-              <div className="col-span-3"><Inp label="Driver Phone" value={v.driverPhone ?? ''} onChange={(s) => setVehicle(i, { driverPhone: s })} /></div>
-              <div className="col-span-1">
-                <button onClick={() => removeVehicle(i)} className="p-2 text-red-600 hover:bg-red-50 rounded"><X className="w-4 h-4" /></button>
-              </div>
+        {mode === 'create' && (
+          <>
+            <h3 className="font-semibold mb-4 pb-2 border-b border-gray-300 flex items-center justify-between">
+              Vehicles
+              <button onClick={addVehicle} className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"><Plus className="w-3 h-3" /> Add</button>
+            </h3>
+            <div className="space-y-2 mb-6">
+              {form.vehicles.map((v, i) => (
+                <div key={i} className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-4"><Inp label="Vehicle No." value={v.vehicleNumber} onChange={(s) => setVehicle(i, { vehicleNumber: s.toUpperCase() })} mono /></div>
+                  <div className="col-span-4"><Inp label="Driver Name" value={v.driverName ?? ''} onChange={(s) => setVehicle(i, { driverName: s })} /></div>
+                  <div className="col-span-3"><Inp label="Driver Phone" value={v.driverPhone ?? ''} onChange={(s) => setVehicle(i, { driverPhone: s })} /></div>
+                  <div className="col-span-1">
+                    <button onClick={() => removeVehicle(i)} className="p-2 text-red-600 hover:bg-red-50 rounded"><X className="w-4 h-4" /></button>
+                  </div>
+                </div>
+              ))}
+              {form.vehicles.length === 0 && <p className="text-sm text-gray-500">No vehicles added.</p>}
             </div>
-          ))}
-          {form.vehicles.length === 0 && <p className="text-sm text-gray-500">No vehicles added.</p>}
-        </div>
+          </>
+        )}
+        {mode === 'edit' && (
+          <p className="text-xs text-gray-500 mb-6">Vehicles are managed separately from the supplier list view after save.</p>
+        )}
 
         <div className="flex gap-4">
           <button onClick={handleSave} disabled={saving || loading} className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center justify-center gap-2 font-medium">

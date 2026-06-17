@@ -17,9 +17,8 @@ import {
   onAuthExpired,
 } from '../utils/api';
 import { buildDisplayName, pickPrimaryRole } from '../utils/roles';
-import { shiftApi } from '../services/operationsApi';
 
-export type UserRole = 'Super Admin' | 'Admin' | 'Operator' | 'Billing Staff' | 'Supervisor' | 'Accounts' | 'Invoice Billing';
+export type UserRole = 'Admin' | 'Operator' | 'Billing Staff' | 'Supervisor' | 'Accounts';
 
 export interface User {
   /** Display name. */
@@ -63,9 +62,6 @@ interface AppContextType {
   hasPermission: (code: string) => boolean;
   shiftStatus: ShiftStatus;
   setShiftStatus: (status: ShiftStatus) => void;
-  refreshShiftStatus: () => Promise<void>;
-  /** True once the initial shift status fetch has completed. */
-  isShiftLoaded: boolean;
   hardwareDevices: HardwareDevice[];
   setHardwareDevices: (devices: HardwareDevice[]) => void;
   currentWeight: number;
@@ -102,42 +98,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
   const [shiftStatus, setShiftStatus] = useState<ShiftStatus>({
-    isOpen: false,
-    shiftNumber: 0,
-    startedBy: '',
-    startTime: '',
+    isOpen: true,
+    shiftNumber: 2,
+    startedBy: 'Rajesh Kumar',
+    startTime: '14:00:00',
   });
-  const [isShiftLoaded, setIsShiftLoaded] = useState(false);
-
-  // Sync the local shift indicator with the API. Called on bootstrap and
-  // after login so the sidebar pill and Shift Open/Close screens always
-  // reflect the actual database state (the previous hardcoded default
-  // caused the Shift Open screen to think a shift was active when none
-  // existed in the DB).
-  const refreshShiftStatus = useCallback(async () => {
-    try {
-      // Per-user shift: each operator has their own active shift. The
-      // `mine=true` query restricts the result to shifts opened by the
-      // currently authenticated user.
-      const res = await shiftApi.list({ status: 'OPEN', mine: true, pageSize: 1 });
-      const open = res.items?.[0];
-      if (open) {
-        const num = Number(String(open.shiftNo).replace(/[^0-9]/g, '')) || 0;
-        setShiftStatus({
-          isOpen: true,
-          shiftNumber: num,
-          startedBy: open.openedBySnapshot || '',
-          startTime: open.openedAt ? new Date(open.openedAt).toLocaleTimeString() : '',
-        });
-      } else {
-        setShiftStatus({ isOpen: false, shiftNumber: 0, startedBy: '', startTime: '' });
-      }
-    } catch {
-      // Permission denied / network error — leave the previous state intact.
-    } finally {
-      setIsShiftLoaded(true);
-    }
-  }, []);
 
   const [hardwareDevices, setHardwareDevices] = useState<HardwareDevice[]>([
     { name: 'Weighbridge 1', type: 'weighbridge', status: 'online' },
@@ -178,71 +143,25 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setUser(toDisplayUser(me));
       setIsAuthenticated(true);
       setIsAuthLoading(false);
-      void refreshShiftStatus();
     })();
     return () => {
       cancelled = true;
     };
-  }, [refreshShiftStatus]);
+  }, []);
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await loginRequest(username, password);
     setAccessToken(res.accessToken);
     setUser(toDisplayUser(res.user));
     setIsAuthenticated(true);
-    void refreshShiftStatus();
-  }, [refreshShiftStatus]);
+  }, []);
 
   const logout = useCallback(async () => {
     await logoutRequest();
     setAccessToken(null);
     setUser(GUEST_USER);
     setIsAuthenticated(false);
-    setIsShiftLoaded(false);
-    setShiftStatus({ isOpen: false, shiftNumber: 0, startedBy: '', startTime: '' });
   }, []);
-
-  // Poll shift status every 60s while authenticated. If the user had an
-  // open shift and it has been closed (e.g. by the midnight cron), force
-  // a logout. This also keeps the sidebar in sync without a refresh.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    const interval = window.setInterval(() => {
-      void (async () => {
-        const wasOpen = shiftStatus.isOpen;
-        try {
-          const res = await shiftApi.list({ status: 'OPEN', mine: true, pageSize: 1 });
-          const open = res.items?.[0];
-          if (open) {
-            const num = Number(String(open.shiftNo).replace(/[^0-9]/g, '')) || 0;
-            setShiftStatus({
-              isOpen: true,
-              shiftNumber: num,
-              startedBy: open.openedBySnapshot || '',
-              startTime: open.openedAt ? new Date(open.openedAt).toLocaleTimeString() : '',
-            });
-          } else {
-            setShiftStatus({ isOpen: false, shiftNumber: 0, startedBy: '', startTime: '' });
-            // If we previously had an open shift and it just closed (and
-            // the role normally requires a shift), assume the system
-            // auto-closed it at midnight and log the user out.
-            const requiresShift = !['Admin', 'Accounts'].includes(user.role);
-            if (wasOpen && requiresShift) {
-              try {
-                alert('Your shift has been closed by the system (end of day). You will be logged out.');
-              } catch {
-                /* noop */
-              }
-              await logout();
-            }
-          }
-        } catch {
-          /* ignore transient errors */
-        }
-      })();
-    }, 60_000);
-    return () => window.clearInterval(interval);
-  }, [isAuthenticated, shiftStatus.isOpen, user.role, logout]);
 
   const hasPermission = useCallback(
     (code: string) => Boolean(user.permissions?.includes(code)),
@@ -260,8 +179,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       hasPermission,
       shiftStatus,
       setShiftStatus,
-      refreshShiftStatus,
-      isShiftLoaded,
       hardwareDevices,
       setHardwareDevices,
       currentWeight,
@@ -277,7 +194,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logout,
       hasPermission,
       shiftStatus,
-      isShiftLoaded,
       hardwareDevices,
       currentWeight,
       isWeightStable,

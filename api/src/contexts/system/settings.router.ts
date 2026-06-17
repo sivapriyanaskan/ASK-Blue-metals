@@ -38,27 +38,12 @@ router.get(
 
 const KeyParam = z.object({ key: z.string().min(1).max(120) });
 
-// Settings that are safe to expose to any authenticated user. These are
-// non-sensitive configuration values that the frontend needs to apply
-// validation rules consistently (e.g. high-value confirmation prompts).
-const PUBLIC_READABLE_SETTING_KEYS = new Set<string>([
-  'billing.highValueConfirmationLimit',
-  'billing.externalEntryRequired',
-  'billing.cancelWeightToleranceKg',
-]);
-
 router.get(
   '/:key',
+  requirePermissions(Permissions.SYSTEM_SETTINGS_MANAGE),
   validate('params', KeyParam),
   asyncHandler(async (req, res) => {
     const { key } = req.params as { key: string };
-    if (!PUBLIC_READABLE_SETTING_KEYS.has(key)) {
-      // Non-public keys require the manage permission.
-      if (!req.user) throw Errors.unauthorized();
-      if (!req.user.permissions.has(Permissions.SYSTEM_SETTINGS_MANAGE)) {
-        throw Errors.forbidden(`Missing permissions: ${Permissions.SYSTEM_SETTINGS_MANAGE}`);
-      }
-    }
     const item = await prisma.systemSetting.findUnique({ where: { key } });
     if (!item) throw Errors.notFound(`Setting ${key}`);
     res.json(item);

@@ -27,16 +27,6 @@ import {
 
 const D = (v: number | string | Prisma.Decimal) => new Prisma.Decimal(v);
 const round2 = (d: Prisma.Decimal) => d.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-const DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT = 750000;
-
-async function getHighValueConfirmationLimit(db: Prisma.TransactionClient) {
-  const raw = await db.systemSetting.findUnique({
-    where: { key: 'billing.highValueConfirmationLimit' },
-    select: { value: true },
-  });
-  const parsed = Number(raw?.value ?? DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT;
-}
 
 // Manual override for rate / GST is allowed; otherwise the server resolves them.
 const DenomRow = z.object({
@@ -46,18 +36,7 @@ const DenomRow = z.object({
 });
 
 const FromToken = z.object({
-  // grossWeight may be omitted when directAmount is used.
-  grossWeight: z.coerce.number().positive().max(99999999).optional(),
-  // Direct amount entry path (#24): when set, we skip weight×rate calc and
-  // back-calculate the taxable amount from this value (GST exclusive).
-  directAmount: z.coerce.number().positive().max(9_999_999_999).optional(),
-  // Override of bill type at the bill level (#2 / #9).
-  billTypeOverride: z.enum(['TAX_INVOICE', 'NON_GST', 'WEIGHT_SLIP']).optional(),
-  // Capture-reason for high-value bills (#5).
-  confirmationReason: z.string().trim().max(500).optional(),
-  placeOfSupply: z.string().trim().max(160).optional(),
-  billToAddress: z.string().trim().max(500).optional(),
-  shipToAddress: z.string().trim().max(500).optional(),
+  grossWeight: z.coerce.number().positive().max(99999999),
   rateOverride: z.coerce.number().nonnegative().optional(),
   cgstPercent: z.coerce.number().min(0).max(50).optional(),
   sgstPercent: z.coerce.number().min(0).max(50).optional(),
@@ -66,13 +45,8 @@ const FromToken = z.object({
   paymentMode: z.enum(['CASH', 'ONLINE', 'CREDIT', 'MIXED']).default('CREDIT'),
   cashAmount: z.coerce.number().min(0).default(0),
   onlineAmount: z.coerce.number().min(0).default(0),
-  // #23: credit may be negative to represent a debit adjustment.
-  creditAmount: z.coerce.number().default(0),
-  // Driver bata (allowance) paid to driver — captured at billing time.
-  driverBata: z.coerce.number().min(0).default(0),
+  creditAmount: z.coerce.number().min(0).default(0),
   denominations: z.array(DenomRow).default([]),
-  paymentDeferralOption: z.enum(['PAY_NOW', 'PAY_NEXT_BILL']).optional(),
-  remainingBalance: z.coerce.number().min(0).optional(),
   remarks: z.string().trim().max(500).optional().nullable(),
 });
 
@@ -95,20 +69,9 @@ const IdParam = z.object({ id: z.string().min(1) });
 const TokenIdParam = z.object({ tokenId: z.string().min(1) });
 
 const billInclude = {
-  customer: { select: { id: true, code: true, name: true, billType: true, gstNumber: true, address: true, paymentDueDays: true } },
+  customer: { select: { id: true, code: true, name: true, billType: true, gstNumber: true } },
   item: { select: { id: true, code: true, name: true, hsnCode: true } },
-  token: {
-    select: {
-      id: true,
-      tokenNo: true,
-      entryNo: true,
-      tokenDateTime: true,
-      anprImageRef: true,
-      anprNumberPlateText: true,
-      loadImageRef: true,
-      customer: { select: { id: true, name: true } },
-    },
-  },
+  token: { select: { id: true, tokenNo: true, entryNo: true, tokenDateTime: true } },
 } as const;
 
 const router = Router();
@@ -151,20 +114,7 @@ router.get(
       }),
       prisma.salesBill.count({ where }),
     ]);
-    // Side-fetch creator names so the reports can show a "Created By" column
-    // without adding a User relation to SalesBill.
-    const creatorIds = Array.from(new Set(items.map(b => b.createdById).filter(Boolean) as string[]));
-    const creators = creatorIds.length
-      ? await prisma.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, firstName: true, lastName: true, username: true } })
-      : [];
-    const creatorMap = new Map(
-      creators.map(u => {
-        const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.username;
-        return [u.id, name] as const;
-      }),
-    );
-    const enriched = items.map(b => ({ ...b, createdByName: creatorMap.get(b.createdById) ?? null }));
-    res.json({ items: enriched, page: q.page, pageSize: q.pageSize, total });
+    res.json({ items, page: q.page, pageSize: q.pageSize, total });
   }),
 );
 
@@ -233,67 +183,31 @@ router.post(
       }
 
       const empty = D(token.emptyWeight);
-      // Resolve the effective bill type for this transaction:
-      //   override (per-bill) > customer default.
-      const effectiveBillType = body.billTypeOverride ?? token.customer.billType;
-      const isNonGst = effectiveBillType !== 'TAX_INVOICE';
-      const isWeightSlip = effectiveBillType === 'WEIGHT_SLIP';
-
-      // Compute weights & taxable amount. Two entry paths:
-      //   (a) directAmount  -> taxable comes straight from the user.
-      //   (b) grossWeight   -> classic weight × rate calculation.
-      let gross: Prisma.Decimal;
-      let net: Prisma.Decimal;
-      let rate: Prisma.Decimal;
-      let taxable: Prisma.Decimal;
-      const billDate = new Date();
-
-      if (body.directAmount !== undefined) {
-        if (!body.grossWeight) {
-          // For direct-amount bills we still want a sensible weight record.
-          gross = empty;
-          net = D(0);
-        } else {
-          gross = D(body.grossWeight);
-          if (gross.lessThanOrEqualTo(empty)) {
-            throw Errors.badRequest('Gross weight must exceed empty weight');
-          }
-          const netKgActual = gross.minus(empty);
-          const netKg = isNonGst && !isWeightSlip ? netKgActual.dividedBy(2) : netKgActual;
-          net = round2(netKg.dividedBy(1000));
-        }
-        taxable = round2(D(body.directAmount));
-        // Synthesize a per-ton rate for record-keeping when net > 0.
-        rate = net.greaterThan(0) ? round2(taxable.dividedBy(net)) : D(0);
-      } else {
-        if (body.grossWeight === undefined) {
-          throw Errors.badRequest('grossWeight is required when directAmount is not provided');
-        }
-        gross = D(body.grossWeight);
-        if (gross.lessThanOrEqualTo(empty)) {
-          throw Errors.badRequest('Gross weight must exceed empty weight');
-        }
-        const netKgActual = gross.minus(empty);
-        // Non-GST (Estimate) customers historically billed for half quantity.
-        // WEIGHT_SLIP is treated as a full-quantity, no-tax slip.
-        const netKg = isNonGst && !isWeightSlip ? netKgActual.dividedBy(2) : netKgActual;
-        net = round2(netKg.dividedBy(1000));
-        rate = body.rateOverride !== undefined
-          ? D(body.rateOverride)
-          : await resolveRate(tx, token.customerId, token.itemId, billDate, D(token.item.sellingPrice));
-        taxable = round2(net.times(rate));
+      const gross = D(body.grossWeight);
+      if (gross.lessThanOrEqualTo(empty)) {
+        throw Errors.badRequest('Gross weight must exceed empty weight');
       }
+      const netKgActual = gross.minus(empty);
+      // For Non-GST (Estimate) customers, bill only HALF of the actual quantity
+      // (industry practice for kachcha / non-tax bills). Tax-invoice customers
+      // are billed for the full quantity.
+      const isNonGst = token.customer.billType !== 'TAX_INVOICE';
+      const netKg = isNonGst ? netKgActual.dividedBy(2) : netKgActual;
+      // Sales bill rates are per-ton. Convert kg → tons (rounded to 2 dp).
+      const net = round2(netKg.dividedBy(1000));
+
+      const billDate = new Date();
+      const rate = body.rateOverride !== undefined
+        ? D(body.rateOverride)
+        : await resolveRate(tx, token.customerId, token.itemId, billDate, D(token.item.sellingPrice));
+
+      const taxable = round2(net.times(rate));
 
       const itemGst = D(token.item.gstPercent);
       let cgstP: Prisma.Decimal;
       let sgstP: Prisma.Decimal;
       let igstP: Prisma.Decimal;
-      if (isWeightSlip) {
-        // Weight slip never carries GST.
-        cgstP = D(0);
-        sgstP = D(0);
-        igstP = D(0);
-      } else if (
+      if (
         body.cgstPercent !== undefined ||
         body.sgstPercent !== undefined ||
         body.igstPercent !== undefined
@@ -302,28 +216,11 @@ router.post(
         sgstP = D(body.sgstPercent ?? 0);
         igstP = D(body.igstPercent ?? 0);
       } else if (!isNonGst) {
-        // Auto-detect intra/inter-state split from GSTIN state codes.
-        const company = await tx.companyProfile.findUnique({
-          where: { id: 'singleton' },
-          select: { gstin: true },
-        });
-        const companyStateCode = company?.gstin?.slice(0, 2) ?? '';
-        const customerStateCode = token.customer.gstNumber?.slice(0, 2) ?? '';
-        const isInterState =
-          companyStateCode.length === 2 &&
-          customerStateCode.length === 2 &&
-          companyStateCode !== customerStateCode;
-
-        if (isInterState) {
-          cgstP = D(0);
-          sgstP = D(0);
-          igstP = itemGst;
-        } else {
-          const half = itemGst.dividedBy(2);
-          cgstP = half;
-          sgstP = half;
-          igstP = D(0);
-        }
+        // Default to intra-state split (CGST + SGST = Item.gstPercent).
+        const half = itemGst.dividedBy(2);
+        cgstP = half;
+        sgstP = half;
+        igstP = D(0);
       } else {
         // Non-GST customer: bill is on half quantity/amount, but GST is still
         // computed on that halved taxable amount so the recorded total is
@@ -337,9 +234,7 @@ router.post(
       const cgstAmt = round2(taxable.times(cgstP).dividedBy(100));
       const sgstAmt = round2(taxable.times(sgstP).dividedBy(100));
       const igstAmt = round2(taxable.times(igstP).dividedBy(100));
-      const tcsP = isWeightSlip
-        ? D(0)
-        : D(body.tcsPercent ?? (token.customer.tcsApplicable ? 0.1 : 0));
+      const tcsP = D(body.tcsPercent ?? (token.customer.tcsApplicable ? 0.1 : 0));
       const tcsAmt = round2(taxable.plus(cgstAmt).plus(sgstAmt).plus(igstAmt).times(tcsP).dividedBy(100));
 
       const subtotal = taxable.plus(cgstAmt).plus(sgstAmt).plus(igstAmt).plus(tcsAmt);
@@ -348,15 +243,8 @@ router.post(
       const total = rounded;
 
       // Payment validation
-      const priorBalance = D(token.customer.remainingBalance ?? 0);
-      const paymentDeferralOption = body.paymentDeferralOption ?? 'PAY_NOW';
-      const appliedAdvanceToCurrentBill = paymentDeferralOption === 'PAY_NOW' && priorBalance.lessThan(0)
-        ? Prisma.Decimal.min(priorBalance.negated(), total)
-        : D(0);
-
       const cash = D(body.cashAmount);
       const online = D(body.onlineAmount);
-      // #23: credit may be negative — don't coerce to positive.
       const credit = D(body.creditAmount);
       const paySum = cash.plus(online).plus(credit);
       if (body.paymentMode === 'CASH' && !cash.equals(total)) {
@@ -369,38 +257,11 @@ router.post(
       let normCash = cash;
       let normOnline = online;
       let normCredit = credit;
-      if (paySum.equals(0) && body.remainingBalance === undefined && !(paymentDeferralOption === 'PAY_NOW' && !priorBalance.equals(0))) {
+      if (paySum.equals(0)) {
         if (body.paymentMode === 'CASH') normCash = total;
         else if (body.paymentMode === 'ONLINE') normOnline = total;
         else if (body.paymentMode === 'CREDIT') normCredit = total;
       }
-
-      const receivedTotal = normCash.plus(normOnline).plus(normCredit);
-      const billExposure = total.minus(appliedAdvanceToCurrentBill).greaterThan(0)
-        ? round2(total.minus(appliedAdvanceToCurrentBill))
-        : D(0);
-      const computedRemaining = receivedTotal.lessThan(billExposure)
-        ? round2(billExposure.minus(receivedTotal))
-        : D(0);
-      const requestedRemaining = body.remainingBalance !== undefined
-        ? round2(D(body.remainingBalance))
-        : computedRemaining;
-      const remainingForBill = requestedRemaining.greaterThan(0) ? requestedRemaining : D(0);
-
-      const highValueConfirmationLimit = await getHighValueConfirmationLimit(tx);
-      const confirmationAmount = paymentDeferralOption === 'PAY_NOW'
-        ? round2(total.plus(priorBalance))
-        : total;
-      const normalizedConfirmationAmount = confirmationAmount.greaterThan(0)
-        ? confirmationAmount.toNumber()
-        : 0;
-      if (normalizedConfirmationAmount > highValueConfirmationLimit && !body.confirmationReason?.trim()) {
-        throw Errors.badRequest('Confirmation reason is required when payment amount exceeds the configured limit');
-      }
-
-      const overflowAfterCurrentBill = receivedTotal.greaterThan(total)
-        ? round2(receivedTotal.minus(total))
-        : D(0);
 
       const seq = await nextValue(tx, salesBillScope(billDate));
       const billNo = formatSalesBillNo(seq, billDate);
@@ -434,17 +295,8 @@ router.post(
           cashAmount: normCash,
           onlineAmount: normOnline,
           creditAmount: normCredit,
-          driverBata: D(body.driverBata ?? 0),
           denominations: (body.denominations ?? []) as unknown as Prisma.InputJsonValue,
-          paymentDeferralOption,
-          remainingBalance: remainingForBill,
           remarks: body.remarks ?? null,
-          billTypeOverride: body.billTypeOverride ?? null,
-          confirmationReason: body.confirmationReason ?? null,
-          directAmount: body.directAmount !== undefined ? D(body.directAmount) : null,
-          placeOfSupply: body.placeOfSupply ?? null,
-          billToAddress: body.billToAddress ?? null,
-          shipToAddress: body.shipToAddress ?? null,
           status: 'POSTED',
           createdById: ctx.actorId,
         },
@@ -454,13 +306,6 @@ router.post(
       await tx.token.update({
         where: { id: token.id },
         data: { status: 'BILLED', updatedById: ctx.actorId },
-      });
-
-      const nextPending = round2(priorBalance.plus(total).minus(receivedTotal));
-
-      await tx.customer.update({
-        where: { id: token.customerId },
-        data: { remainingBalance: nextPending },
       });
 
       return bill;

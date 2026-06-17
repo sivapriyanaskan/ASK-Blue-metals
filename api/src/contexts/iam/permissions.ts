@@ -104,13 +104,6 @@ export const DEFAULT_ROLES: Array<{
   permissions: PermissionCode[];
 }> = [
   {
-    code: 'SUPER_ADMIN',
-    name: 'Super Admin',
-    description: 'Highest privilege — only Super Admins can manage Invoice Billing role/users',
-    isSystem: true,
-    permissions: ALL_PERMISSIONS,
-  },
-  {
     code: 'ADMIN',
     name: 'Admin',
     description: 'Full system access',
@@ -128,8 +121,6 @@ export const DEFAULT_ROLES: Array<{
       Permissions.TOKEN_CANCEL,
       Permissions.ENTRY_PASS_VIEW,
       Permissions.ENTRY_PASS_CREATE,
-      Permissions.WEIGHT_SLIP_VIEW,
-      Permissions.WEIGHT_SLIP_CREATE,
       Permissions.CUSTOMER_VIEW,
       Permissions.SUPPLIER_VIEW,
       Permissions.ITEM_VIEW,
@@ -149,8 +140,6 @@ export const DEFAULT_ROLES: Array<{
       Permissions.SALES_BILL_EDIT,
       Permissions.PURCHASE_BILL_VIEW,
       Permissions.PURCHASE_BILL_CREATE,
-      Permissions.WEIGHT_SLIP_VIEW,
-      Permissions.WEIGHT_SLIP_CREATE,
       Permissions.TOKEN_VIEW,
       Permissions.ENTRY_PASS_VIEW,
       Permissions.CUSTOMER_VIEW,
@@ -203,42 +192,4 @@ export const DEFAULT_ROLES: Array<{
       Permissions.PRINT_REPORT,
     ],
   },
-  {
-    code: 'INVOICE_BILLING',
-    name: 'Invoice Billing',
-    description: 'GST tax-invoice sales billing only (created by Super Admin)',
-    isSystem: true,
-    permissions: [
-      Permissions.SALES_BILL_VIEW,
-      Permissions.SALES_BILL_CREATE,
-      Permissions.SALES_BILL_EDIT,
-      Permissions.CUSTOMER_VIEW,
-      Permissions.CUSTOMER_CREATE,
-      Permissions.CUSTOMER_EDIT,
-      Permissions.ITEM_VIEW,
-      Permissions.VEHICLE_VIEW,
-      Permissions.DRIVER_VIEW,
-      Permissions.TOKEN_VIEW,
-      Permissions.TOKEN_CREATE,
-      Permissions.TOKEN_CANCEL,
-      Permissions.ENTRY_PASS_VIEW,
-      Permissions.ENTRY_PASS_CREATE,
-      Permissions.WEIGHT_SLIP_VIEW,
-      Permissions.WEIGHT_SLIP_CREATE,
-      Permissions.PRINT_TOKEN,
-      Permissions.PRINT_BILL,
-      Permissions.REPORTS_VIEW,
-    ],
-  },
 ];
-
-/**
- * Roles considered "elevated" – only a Super Admin (code SUPER_ADMIN) may
- * assign them, list users that have them, or view them in the Role catalogue.
- * NOTE: Admin (ADMIN) is intentionally NOT a Super Admin for these checks.
- */
-export const SUPER_ADMIN_ONLY_ROLES: string[] = ['INVOICE_BILLING', 'SUPER_ADMIN'];
-
-export function actorIsSuperAdmin(roleCodes: string[] | undefined | null): boolean {
-  return (roleCodes ?? []).includes('SUPER_ADMIN');
-}

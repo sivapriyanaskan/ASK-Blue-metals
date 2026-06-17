@@ -6,14 +6,12 @@ import {
   itemGroupsApi,
   itemSubGroupsApi,
   unitsApi,
-  printersApi,
   describeError,
   type ItemRow,
   type ItemInput,
   type ItemGroupRow,
   type ItemSubGroupRow,
   type UnitRow,
-  type PrinterRow,
 } from '../services/mastersApi';
 
 type Mode = 'list' | 'create' | 'edit' | 'view';
@@ -30,7 +28,6 @@ interface FormState {
   isSaleMaterial: boolean;
   sellingPrice: string;
   gstPercent: string;
-  defaultPrinterId: string;
   isActive: boolean;
 }
 
@@ -46,7 +43,6 @@ const empty: FormState = {
   isSaleMaterial: true,
   sellingPrice: '0',
   gstPercent: '0',
-  defaultPrinterId: '',
   isActive: true,
 };
 
@@ -56,7 +52,6 @@ export const ItemMaster = () => {
   const [groups, setGroups] = useState<ItemGroupRow[]>([]);
   const [subGroups, setSubGroups] = useState<ItemSubGroupRow[]>([]);
   const [units, setUnits] = useState<UnitRow[]>([]);
-  const [printers, setPrinters] = useState<PrinterRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +65,6 @@ export const ItemMaster = () => {
       itemGroupsApi.list({ pageSize: 200, isActive: true }).then((r) => setGroups(r.items)),
       itemSubGroupsApi.list({ pageSize: 200, isActive: true }).then((r) => setSubGroups(r.items)),
       unitsApi.list({ pageSize: 200, isActive: true }).then((r) => setUnits(r.items)),
-      printersApi.list({ pageSize: 200, isActive: true }).then((r) => setPrinters(r.items)),
     ]).catch(() => undefined);
   }, []);
 
@@ -118,7 +112,6 @@ export const ItemMaster = () => {
         isSaleMaterial: it.isSaleMaterial,
         sellingPrice: it.sellingPrice ?? '0',
         gstPercent: it.gstPercent ?? '0',
-        defaultPrinterId: it.defaultPrinterId ?? '',
         isActive: it.isActive,
       });
       setEditingId(id);
@@ -164,7 +157,6 @@ export const ItemMaster = () => {
         isSaleMaterial: form.isSaleMaterial,
         sellingPrice: Number(form.sellingPrice) || 0,
         gstPercent: Number(form.gstPercent) || 0,
-        defaultPrinterId: form.defaultPrinterId || null,
         isActive: form.isActive,
       };
       if (editingId) {
@@ -197,7 +189,6 @@ export const ItemMaster = () => {
   const filteredSubGroups = form.groupId ? subGroups.filter((s) => s.groupId === form.groupId) : subGroups;
   const subGroupOptions = [{ label: 'Select sub-group', value: '' }, ...filteredSubGroups.map((s) => ({ label: `${s.code} - ${s.name}`, value: s.id }))];
   const unitOptions = [{ label: 'Select unit', value: '' }, ...units.map((u) => ({ label: `${u.code} - ${u.name}`, value: u.id }))];
-  const printerOptions = [{ label: '— None —', value: '' }, ...printers.map((p) => ({ label: `${p.code} - ${p.name}`, value: p.id }))];
 
   if (mode === 'list') {
     return (
@@ -283,7 +274,6 @@ export const ItemMaster = () => {
             <Disp label="Purchase Unit" value={viewing.purchaseUnit?.name ?? '-'} />
             <Disp label="Selling Unit" value={viewing.sellingUnit?.name ?? '-'} />
             <Disp label="HSN Code" value={viewing.hsnCode ?? '-'} />
-            <Disp label="Default Printer" value={viewing.defaultPrinter?.name ?? '-'} />
             <Disp label="Selling Price" value={viewing.sellingPrice} />
             <Disp label="GST %" value={viewing.gstPercent} />
             <Disp label="Raw Material" value={viewing.isRawMaterial ? 'Yes' : 'No'} />
@@ -331,39 +321,25 @@ export const ItemMaster = () => {
             <SearchableDropdown options={unitOptions} value={form.sellingUnitId} onValueChange={(v) => setForm({ ...form, sellingUnitId: v })} placeholder="Select unit" />
           </div>
           <Inp label="HSN Code" value={form.hsnCode} onChange={(v) => setForm({ ...form, hsnCode: v })} mono />
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Default Printer</label>
-            <SearchableDropdown options={printerOptions} value={form.defaultPrinterId} onValueChange={(v) => setForm({ ...form, defaultPrinterId: v })} placeholder="Select printer" />
-          </div>
-          <Inp label="Selling Price *" value={form.sellingPrice} onChange={(v) => setForm({ ...form, sellingPrice: v })} type="number" />
+          <Inp label="Selling Price" value={form.sellingPrice} onChange={(v) => setForm({ ...form, sellingPrice: v })} type="number" />
           <Inp label="GST %" value={form.gstPercent} onChange={(v) => setForm({ ...form, gstPercent: v })} type="number" />
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Raw Material (Stock / Production input)
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Raw Material</label>
             <SearchableDropdown
               options={[{ label: 'No', value: 'false' }, { label: 'Yes', value: 'true' }]}
               value={form.isRawMaterial ? 'true' : 'false'}
               onValueChange={(v) => setForm({ ...form, isRawMaterial: v === 'true' })}
               placeholder="Select"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              Tick Yes for inventory items consumed in production (stock-tracked).
-            </p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Sale Material (Product / Sellable)
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Sale Material</label>
             <SearchableDropdown
               options={[{ label: 'No', value: 'false' }, { label: 'Yes', value: 'true' }]}
               value={form.isSaleMaterial ? 'true' : 'false'}
               onValueChange={(v) => setForm({ ...form, isSaleMaterial: v === 'true' })}
               placeholder="Select"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              Tick Yes for finished products that appear in Sales Bill / Token.
-            </p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Status *</label>

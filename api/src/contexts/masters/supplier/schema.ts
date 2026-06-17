@@ -1,12 +1,15 @@
 import { z } from 'zod';
 
+const VEHICLE_REGEX = /^[A-Z0-9 -]{4,16}$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 
 const VehicleInput = z.object({
   vehicleNumber: z
     .string()
+    .min(4)
+    .max(16)
     .transform((v) => v.toUpperCase().trim())
-    .pipe(z.string().min(1, 'Vehicle number is required')),
+    .pipe(z.string().regex(VEHICLE_REGEX, 'Invalid vehicle number')),
   driverName: z.string().max(120).optional(),
   driverPhone: z
     .string()
@@ -20,11 +23,9 @@ export const CreateSupplierSchema = z.object({
     .string()
     .min(1)
     .max(32)
-    .regex(/^[A-Z0-9_-]+$/, 'Code must be uppercase alphanumeric with - or _')
-    .optional(),
+    .regex(/^[A-Z0-9_-]+$/, 'Code must be uppercase alphanumeric with - or _'),
   name: z.string().min(1).max(160),
   address: z.string().max(500).optional(),
-  state: z.string().max(120).optional(),
   supplierType: z.enum(['TON_BASED', 'REPAIR_MAINTENANCE']),
   controlAccountId: z.string().min(1).optional(),
   gstNumber: z.string().regex(GSTIN_REGEX, 'Invalid GSTIN').optional(),
@@ -42,7 +43,6 @@ export type CreateSupplierInput = z.infer<typeof CreateSupplierSchema>;
 export const UpdateSupplierSchema = z.object({
   name: z.string().min(1).max(160).optional(),
   address: z.string().max(500).nullable().optional(),
-  state: z.string().max(120).nullable().optional(),
   supplierType: z.enum(['TON_BASED', 'REPAIR_MAINTENANCE']).optional(),
   controlAccountId: z.string().min(1).nullable().optional(),
   gstNumber: z.string().regex(GSTIN_REGEX, 'Invalid GSTIN').nullable().optional(),
@@ -54,7 +54,6 @@ export const UpdateSupplierSchema = z.object({
     .optional(),
   email: z.string().email().max(254).nullable().optional(),
   isActive: z.boolean().optional(),
-  vehicles: z.array(VehicleInput).max(50).optional(),
 });
 export type UpdateSupplierInput = z.infer<typeof UpdateSupplierSchema>;
 

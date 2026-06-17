@@ -344,6 +344,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Invoice Total</label>
@@ -354,6 +355,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Billing Total</label>
@@ -364,6 +366,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Voucher Total</label>
@@ -374,6 +377,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Payment Voucher Total</label>
@@ -384,6 +388,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Bata Paid</label>
@@ -394,6 +399,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Purchase Total</label>
@@ -404,6 +410,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Total Cash Received</label>
@@ -414,6 +421,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Net Amount</label>
@@ -424,6 +432,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Cash in Hand</label>
@@ -434,6 +443,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 font-semibold"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
             </div>
           </div>
@@ -500,6 +510,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Closing Amount</label>
@@ -510,6 +521,7 @@ export const ShiftManagementEdit = () => {
                   disabled
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
+                <p className="text-xs text-gray-500 mt-1">Auto-calculated</p>
               </div>
             </div>
           </div>

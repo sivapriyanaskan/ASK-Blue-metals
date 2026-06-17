@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router';
 import { useAppContext } from '../context/AppContext';
-import { roleAccessApi, type RoleMenuItem } from '../services/iamApi';
-import { isInvoiceBillingOnly } from '../utils/roles';
+import { roleAccessApi, rolesApi, type RoleMenuItem } from '../services/iamApi';
 import {
   LayoutDashboard,
   Truck,
@@ -70,7 +69,6 @@ const navigationItems: NavItem[] = [
       { label: 'Work Centre Master', code: 'WORK_CENTRE_MASTER', path: '/masters/work-centre', icon: Circle },
       { label: 'Driver / Labour Master', code: 'DRIVER_LABOUR_MASTER', path: '/masters/driver', icon: Circle },
       { label: 'Bill Sundry Master', code: 'BILL_SUNDRY_MASTER', path: '/masters/bill-sundry', icon: Circle },
-      { label: 'Account Master', code: 'ACCOUNT_MASTER', path: '/masters/account-master', icon: Circle },
       { label: 'Bank Master', code: 'BANK_MASTER', path: '/masters/bank-master', icon: Circle },
       { label: 'Printer Master', code: 'PRINTER_MASTER', path: '/masters/printer-master', icon: Circle },
       { label: 'Printer Settings', code: 'PRINTER_SETTINGS', path: '/masters/printer', icon: Circle }
@@ -111,13 +109,14 @@ const navigationItems: NavItem[] = [
     children: [
       { label: 'Sales Register', code: 'SALES_REGISTER', path: '/reports/sales-register', icon: Circle },
       { label: 'Sales With GST – Full Qty', code: 'SALES_WITH_GST_FULL_QTY', path: '/reports/sales-with-gst-full-qty', icon: Circle },
-      { label: 'Sale Invoice Full Qty', code: 'SALES_WITHOUT_GST_FULL_QTY', path: '/reports/sales-without-gst-full-qty', icon: Circle },
-      { label: 'Sale Invoice Half Qty', code: 'SALES_WITHOUT_GST_HALF_QTY', path: '/reports/sales-without-gst-half-qty', icon: Circle },
+      { label: 'Sales Without GST – Full Qty', code: 'SALES_WITHOUT_GST_FULL_QTY', path: '/reports/sales-without-gst-full-qty', icon: Circle },
+      { label: 'Sales Without GST – Half Qty', code: 'SALES_WITHOUT_GST_HALF_QTY', path: '/reports/sales-without-gst-half-qty', icon: Circle },
       { label: 'Sales GST Combined', code: 'SALES_GST_COMBINED', path: '/reports/sales-gst-combined', icon: Circle },
       { label: 'Sales Customer Wise', code: 'SALES_CUSTOMER_WISE', path: '/reports/sales-customer-wise', icon: Circle },
       { label: 'Purchase Register', code: 'PURCHASE_REGISTER', path: '/reports/purchase-register', icon: Circle },
       { label: 'Purchase Item Wise', code: 'PURCHASE_ITEM_WISE', path: '/reports/purchase-item-wise', icon: Circle },
       { label: 'Purchase Supplier Wise', code: 'PURCHASE_SUPPLIER_WISE', path: '/reports/purchase-supplier-wise', icon: Circle },
+      { label: 'Purchase Bill Wise', code: 'PURCHASE_BILL_WISE', path: '/reports/purchase-bill-wise', icon: Circle },
       { label: 'Production Register', code: 'PRODUCTION_REGISTER', path: '/reports/production-register', icon: Circle },
       { label: 'Production Item Wise', code: 'PRODUCTION_ITEM_WISE', path: '/reports/production-item-wise', icon: Circle },
       { label: 'Production Purchase Wise', code: 'PRODUCTION_PURCHASE_WISE', path: '/reports/production-purchase-wise', icon: Circle },
@@ -140,14 +139,14 @@ const navigationItems: NavItem[] = [
       { label: 'User Management', code: 'USER_MANAGEMENT', path: '/admin/users', icon: Circle },
       { label: 'Role Management', code: 'ROLE_MANAGEMENT', path: '/settings/roles', icon: Circle }
     ],
-    roles: ['Super Admin', 'Admin', 'Accounts']
+    roles: ['Admin', 'Accounts']
   },
   {
     label: 'Settings',
     code: 'SETTINGS',
     path: '/settings',
     icon: Settings,
-    roles: ['Super Admin', 'Admin']
+    roles: ['Admin']
   }
 ];
 
@@ -158,48 +157,48 @@ export const Layout = () => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [allowedMenuCodes, setAllowedMenuCodes] = useState<Set<string>>(new Set());
   const [loadingMenuAccess, setLoadingMenuAccess] = useState(true);
-  const [showShiftBlocker, setShowShiftBlocker] = useState(false);
-  const { user, shiftStatus, isShiftLoaded, hardwareDevices } = useAppContext();
+  const { user, shiftStatus, hardwareDevices } = useAppContext();
   const location = useLocation();
   const navigate = useNavigate();
-
-  // Menu codes that should be hidden for INVOICE_BILLING users (no Super-Admin
-  // override). They are restricted to GST tax-invoice flows only.
-  const invoiceOnly = isInvoiceBillingOnly(user.roleCodes);
-  const HIDDEN_FOR_INVOICE_ONLY = new Set<string>([
-    'SALES_WITHOUT_GST_FULL_QTY',
-    'SALES_WITHOUT_GST_HALF_QTY',
-    'SALES_GST_COMBINED',
-  ]);
-  const INVOICE_ONLY_LABEL_OVERRIDES: Record<string, string> = {
-    SALES_WITH_GST_FULL_QTY: 'Sales',
-  };
 
   /* -------------------- Load role menu access -------------------- */
   useEffect(() => {
     const loadMenuAccess = async () => {
       setLoadingMenuAccess(true);
       try {
-        // If user has no roles, allow all menus (admin fallback for unauthenticated/dev)
+        // If user has no roles, allow all menus (admin fallback)
         if (!user.roleCodes || user.roleCodes.length === 0) {
           setAllowedMenuCodes(new Set()); // Empty set means show all
           setLoadingMenuAccess(false);
           return;
         }
 
-        // Fetch the current user's effective (union-of-roles) menu access.
-        const menuAccess = await roleAccessApi.myMenus();
+        // Fetch all roles to map role codes to IDs
+        const rolesResponse = await rolesApi.list();
+        const roleMap = new Map(rolesResponse.items.map(r => [r.code, r.id]));
+
+        // For the primary role, fetch menu access
+        const primaryRoleCode = user.roleCodes[0]; // Use first role (primary)
+        const roleId = roleMap.get(primaryRoleCode);
+
+        if (!roleId) {
+          console.warn(`Role ID not found for code: ${primaryRoleCode}`);
+          setAllowedMenuCodes(new Set());
+          setLoadingMenuAccess(false);
+          return;
+        }
+
+        const menuAccess = await roleAccessApi.getMenus(roleId);
+        // Only include menus where canView is true
         const allowed = new Set(
           menuAccess.items
-            .filter((m: RoleMenuItem) => m.canView)
-            .map((m: RoleMenuItem) => m.code),
+            .filter(m => m.canView)
+            .map(m => m.code)
         );
         setAllowedMenuCodes(allowed);
       } catch (err) {
         console.error('Failed to load menu access:', err);
-        // On error, hide everything (safer than showing all). Admins will see
-        // the dashboard at minimum if their JWT has no roleCodes.
-        setAllowedMenuCodes(new Set(['DASHBOARD']));
+        setAllowedMenuCodes(new Set()); // Show all on error
       } finally {
         setLoadingMenuAccess(false);
       }
@@ -207,49 +206,6 @@ export const Layout = () => {
 
     void loadMenuAccess();
   }, [user.roleCodes, user.id]);
-
-  /* -------------------- Shift Open enforcement --------------------
-   * Operational roles (anyone other than Super Admin / Admin / Accounts)
-   * must have an OPEN shift before they can use the operational screens
-   * (Token, Entry Pass, Sales Bill, Purchase Bill, Token Cancel). We do
-   * NOT redirect on login anymore — the blocker only kicks in when the
-   * user actually tries to navigate to one of those screens.
-   */
-  const requireShift = !['Super Admin', 'Admin', 'Accounts'].includes(user.role);
-  const SHIFT_OPEN_PATH = '/shift-management/shift-open';
-  const SHIFT_REQUIRED_PATH_PREFIXES = [
-    '/operations/token/create',
-    '/operations/token-creation',
-    '/operations/token-cancel',
-    '/operations/purchase-entry-pass/create',
-    '/operations/sales-bill/create',
-    '/operations/purchase-bill/create',
-  ];
-  const pathNeedsShift = (path: string) =>
-    SHIFT_REQUIRED_PATH_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
-  const shiftBlocked =
-    requireShift &&
-    isShiftLoaded &&
-    !shiftStatus.isOpen &&
-    pathNeedsShift(location.pathname);
-
-  useEffect(() => {
-    if (shiftBlocked) {
-      setShowShiftBlocker(true);
-      navigate(SHIFT_OPEN_PATH, { replace: true });
-    } else {
-      setShowShiftBlocker(false);
-    }
-  }, [shiftBlocked, navigate]);
-
-  const guardNavigation = (path: string | undefined): boolean => {
-    if (!requireShift || !path) return true;
-    if (shiftStatus.isOpen) return true;
-    if (!pathNeedsShift(path)) return true;
-    setShowShiftBlocker(true);
-    navigate(SHIFT_OPEN_PATH);
-    return false;
-  };
 
   const toggleExpanded = (label: string) => {
     setExpandedItems(prev =>
@@ -261,10 +217,10 @@ export const Layout = () => {
   const hasWarningDevice = hardwareDevices.some(d => d.status === 'warning');
 
   return (
-    <div className="flex h-screen bg-gray-50 print:block print:h-auto">
+    <div className="flex h-screen bg-gray-50">
       {/* Left Sidebar */}
       <aside
-        className={`bg-gray-900 text-white transition-all duration-300 flex flex-col print:hidden ${
+        className={`bg-gray-900 text-white transition-all duration-300 flex flex-col ${
           isSidebarCollapsed ? 'w-16' : 'w-64'
         }`}
       >
@@ -290,9 +246,6 @@ export const Layout = () => {
             if (item.roles && !item.roles.includes(user.role)) {
               return null;
             }
-            if (invoiceOnly && item.code && HIDDEN_FOR_INVOICE_ONLY.has(item.code)) {
-              return null;
-            }
 
             // Filter by role-based menu access
             // If allowedMenuCodes is empty, user has admin access (show all)
@@ -302,8 +255,7 @@ export const Layout = () => {
             if (item.children) {
               // For parent items, check if any child is allowed
               const allowedChildren = item.children.filter(child => 
-                (allowedMenuCodes.size === 0 || !child.code || allowedMenuCodes.has(child.code)) &&
-                !(invoiceOnly && child.code && HIDDEN_FOR_INVOICE_ONLY.has(child.code))
+                allowedMenuCodes.size === 0 || !child.code || allowedMenuCodes.has(child.code)
               );
               
               // Only show parent if there are allowed children
@@ -336,23 +288,16 @@ export const Layout = () => {
                       {allowedChildren.map((child) => {
                         const ChildIcon = child.icon;
                         const isActive = location.pathname === child.path;
-                        const childLabel =
-                          invoiceOnly && child.code && INVOICE_ONLY_LABEL_OVERRIDES[child.code]
-                            ? INVOICE_ONLY_LABEL_OVERRIDES[child.code]
-                            : child.label;
                         return (
                           <Link
                             key={child.path}
                             to={child.path!}
-                            onClick={(e) => {
-                              if (!guardNavigation(child.path)) e.preventDefault();
-                            }}
                             className={`flex items-center gap-3 px-4 py-2 pl-12 hover:bg-gray-700 transition-colors ${
                               isActive ? 'bg-blue-600 hover:bg-blue-700' : ''
                             }`}
                           >
                             <ChildIcon className="w-3 h-3" />
-                            <span className="text-sm">{childLabel}</span>
+                            <span className="text-sm">{child.label}</span>
                           </Link>
                         );
                       })}
@@ -373,9 +318,6 @@ export const Layout = () => {
               <Link
                 key={item.path}
                 to={item.path!}
-                onClick={(e) => {
-                  if (!guardNavigation(item.path)) e.preventDefault();
-                }}
                 className={`flex items-center gap-3 px-4 py-2.5 hover:bg-gray-800 transition-colors ${
                   isActive ? 'bg-blue-600 hover:bg-blue-700' : ''
                 }`}
@@ -389,9 +331,9 @@ export const Layout = () => {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden print:block print:overflow-visible">
+      <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="h-16 bg-white border-b border-gray-300 flex items-center justify-between px-6 print:hidden">
+        <header className="h-16 bg-white border-b border-gray-300 flex items-center justify-between px-6">
           <div className="flex items-center gap-4">
             {/* Shift Status */}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg border">
@@ -462,30 +404,21 @@ export const Layout = () => {
                   <Link
                     to="/operations/token-creation"
                     className="block px-4 py-2 hover:bg-gray-50 text-sm"
-                    onClick={(e) => {
-                      setShowQuickActions(false);
-                      if (!guardNavigation('/operations/token-creation')) e.preventDefault();
-                    }}
+                    onClick={() => setShowQuickActions(false)}
                   >
                     Create Token
                   </Link>
                   <Link
                     to="/operations/sales-bill"
                     className="block px-4 py-2 hover:bg-gray-50 text-sm"
-                    onClick={(e) => {
-                      setShowQuickActions(false);
-                      if (!guardNavigation('/operations/sales-bill')) e.preventDefault();
-                    }}
+                    onClick={() => setShowQuickActions(false)}
                   >
                     Create Sales Bill
                   </Link>
                   <Link
                     to="/shift-management/shift-close"
                     className="block px-4 py-2 hover:bg-gray-50 text-sm"
-                    onClick={(e) => {
-                      setShowQuickActions(false);
-                      if (!guardNavigation('/shift-management/shift-close')) e.preventDefault();
-                    }}
+                    onClick={() => setShowQuickActions(false)}
                   >
                     Shift Close
                   </Link>
@@ -535,46 +468,10 @@ export const Layout = () => {
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 overflow-auto bg-gray-50 print:overflow-visible print:bg-white">
+        <main className="flex-1 overflow-auto bg-gray-50">
           <Outlet />
         </main>
       </div>
-
-      {/* Shift Required Modal */}
-      {showShiftBlocker && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 print:hidden"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="shift-blocker-title"
-        >
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
-                <Clock className="w-5 h-5 text-amber-600" />
-              </div>
-              <div className="flex-1">
-                <h2 id="shift-blocker-title" className="text-lg font-semibold text-gray-900">
-                  Open a shift to continue
-                </h2>
-                <p className="mt-1 text-sm text-gray-600">
-                  You need to open a shift before accessing other screens.
-                  Please complete the Shift Open form to start your session.
-                </p>
-              </div>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowShiftBlocker(false)}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                Open Shift
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

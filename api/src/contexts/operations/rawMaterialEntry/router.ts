@@ -11,7 +11,6 @@ const ListQuery = z.object({
   itemId: z.string().min(1).optional(),
   status: z.enum(['SAVED', 'POSTED', 'CANCELLED']).optional(),
   source: z.enum(['ITEM_WISE', 'PURCHASE_WISE']).optional(),
-  shiftId: z.string().min(1).optional(),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
   search: z.string().trim().min(1).optional(),
@@ -22,9 +21,6 @@ const ListQuery = z.object({
 const Create = z.object({
   entryDateTime: z.coerce.date().optional(),
   itemId: z.string().min(1),
-  // #33 — production entries are bound to a shift to power per-shift
-  // production reports and the shift-close gate.
-  shiftId: z.string().min(1).optional().nullable(),
   currentStockTonn: z.coerce.number().nonnegative(),
   consumedTonn: z.coerce.number().nonnegative(),
   status: z.enum(['SAVED', 'POSTED', 'CANCELLED']).optional(),
@@ -35,7 +31,6 @@ const Create = z.object({
 const Update = z.object({
   entryDateTime: z.coerce.date().optional(),
   itemId: z.string().min(1).optional(),
-  shiftId: z.string().min(1).optional().nullable(),
   currentStockTonn: z.coerce.number().nonnegative().optional(),
   consumedTonn: z.coerce.number().nonnegative().optional(),
   status: z.enum(['SAVED', 'POSTED', 'CANCELLED']).optional(),
@@ -52,7 +47,6 @@ router.get('/', validate('query', ListQuery), asyncHandler(async (req, res) => {
     ...(q.itemId ? { itemId: q.itemId } : {}),
     ...(q.status ? { status: q.status } : {}),
     ...(q.source ? { source: q.source } : {}),
-    ...(q.shiftId ? { shiftId: q.shiftId } : {}),
     ...(q.search ? {
       OR: [
         { entryNo: { contains: q.search, mode: 'insensitive' } },
@@ -127,7 +121,6 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
           entryDateTime: data.entryDateTime ?? new Date(),
           itemId: data.itemId,
           itemNameSnapshot: item.name,
-          shiftId: data.shiftId ?? null,
           currentStockTonn: data.currentStockTonn,
           consumedTonn: data.consumedTonn,
           closingStockTonn,
@@ -179,7 +172,6 @@ router.patch('/:id', validate('params', IdParam), validate('body', Update), asyn
     data: {
       ...(data.entryDateTime ? { entryDateTime: data.entryDateTime } : {}),
       ...(data.itemId ? { itemId: data.itemId, itemNameSnapshot } : {}),
-      ...(data.shiftId !== undefined ? { shiftId: data.shiftId } : {}),
       currentStockTonn,
       consumedTonn,
       closingStockTonn,
@@ -190,36 +182,5 @@ router.patch('/:id', validate('params', IdParam), validate('body', Update), asyn
   await auditService.record({ ...actor, action: 'UPDATE', resource: 'RawMaterialEntry', resourceId: updated.id, changes: data });
   res.json(updated);
 }));
-
-/**
- * #33 — Per-shift production summary. Aggregates raw-material consumption
- * grouped by item for a single shift so the production report screen can
- * render "how much each item was processed in this shift".
- */
-const ShiftSummaryQuery = z.object({ shiftId: z.string().min(1) });
-router.get(
-  '/reports/shift-summary',
-  validate('query', ShiftSummaryQuery),
-  asyncHandler(async (req, res) => {
-    const { shiftId } = req.query as unknown as z.infer<typeof ShiftSummaryQuery>;
-    const rows = await prisma.rawMaterialEntry.groupBy({
-      by: ['itemId', 'itemNameSnapshot'],
-      where: { shiftId, status: { not: 'CANCELLED' } },
-      _sum: { currentStockTonn: true, consumedTonn: true, closingStockTonn: true },
-      _count: { _all: true },
-    });
-    res.json({
-      shiftId,
-      items: rows.map((r) => ({
-        itemId: r.itemId,
-        itemName: r.itemNameSnapshot,
-        entries: r._count._all,
-        currentStockTonn: r._sum.currentStockTonn ?? 0,
-        consumedTonn: r._sum.consumedTonn ?? 0,
-        closingStockTonn: r._sum.closingStockTonn ?? 0,
-      })),
-    });
-  }),
-);
 
 export const rawMaterialEntryRouter = router;

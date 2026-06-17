@@ -23,7 +23,7 @@ router.get(
   requirePermissions(Permissions.USER_VIEW),
   validate('query', ListUsersQuerySchema),
   asyncHandler(async (req, res) => {
-    const result = await userService.list(req.query as never, req.user?.roles);
+    const result = await userService.list(req.query as never);
     res.json(result);
   }),
 );
@@ -33,7 +33,7 @@ router.get(
   requirePermissions(Permissions.USER_VIEW),
   validate('params', IdParam),
   asyncHandler(async (req, res) => {
-    const user = await userService.getById((req.params as { id: string }).id, req.user?.roles);
+    const user = await userService.getById((req.params as { id: string }).id);
     res.json(user);
   }),
 );
@@ -47,7 +47,6 @@ router.post(
     const ctx = {
       actorId: req.user.id,
       actorName: req.user.username,
-      actorRoles: req.user.roles,
       ...getRequestContext(req),
       requestId: req.id,
     };
@@ -66,7 +65,6 @@ router.patch(
     const ctx = {
       actorId: req.user.id,
       actorName: req.user.username,
-      actorRoles: req.user.roles,
       ...getRequestContext(req),
       requestId: req.id,
     };
@@ -90,7 +88,6 @@ router.delete(
     const ctx = {
       actorId: req.user.id,
       actorName: req.user.username,
-      actorRoles: req.user.roles,
       ...getRequestContext(req),
       requestId: req.id,
     };

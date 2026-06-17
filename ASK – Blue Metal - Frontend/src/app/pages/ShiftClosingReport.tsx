@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Calendar, User, Download, Printer, FileDown } from 'lucide-react';
+import { Calendar, DollarSign, User, Download } from 'lucide-react';
 import { SearchableDropdown } from '../components/ui/searchable-dropdown';
 import { shiftApi, type ShiftRow } from '../services/operationsApi';
 import { describeError } from '../services/mastersApi';
-import { downloadReportCSV, printReport, inr, type ReportColumn } from '../utils/reportExport';
 
 interface ShiftRecord {
-  id: string;
   shiftNo: string;
   date: string;
   shiftType: 'Day' | 'Night';
@@ -34,7 +32,6 @@ const toRecord = (s: ShiftRow): ShiftRecord => {
   const dateStr = s.shiftDate ? new Date(s.shiftDate).toISOString().slice(0, 10) : '';
   const hour = s.openedAt ? new Date(s.openedAt).getHours() : 8;
   return {
-    id: s.id,
     shiftNo: s.shiftNo,
     date: dateStr,
     shiftType: hour >= 18 || hour < 6 ? 'Night' : 'Day',
@@ -102,50 +99,11 @@ export const ShiftClosingReport = () => {
   const totalExpenses = records.reduce((sum, r) => sum + r.expenses, 0);
   const totalDifference = records.reduce((sum, r) => sum + r.difference, 0);
 
-  const columns: ReportColumn<ShiftRecord>[] = [
-    { header: 'Shift No', value: r => r.shiftNo },
-    { header: 'Date', value: r => r.date },
-    { header: 'Type', value: r => r.shiftType },
-    { header: 'Operator', value: r => r.operator },
-    { header: 'Opening', value: r => inr(r.openingCash), align: 'right' },
-    { header: 'Cash Sales', value: r => inr(r.salesCash), align: 'right' },
-    { header: 'Total Sales', value: r => inr(r.totalSales), align: 'right' },
-    { header: 'Expenses', value: r => inr(r.expenses), align: 'right' },
-    { header: 'Closing', value: r => inr(r.closingCash), align: 'right' },
-    { header: 'Difference', value: r => r.difference, align: 'right' },
-    { header: 'Status', value: r => r.status },
-  ];
-  const meta = () => ({
-    title: 'Shift Closing Report',
-    subtitle: [
-      filters.fromDate || filters.toDate ? `From ${filters.fromDate || '—'} to ${filters.toDate || '—'}` : 'All Dates',
-      filters.operator ? `Operator: ${filters.operator}` : '',
-      filters.status ? `Status: ${filters.status}` : '',
-    ].filter(Boolean) as string[],
-    totals: ['', '', '', 'TOTALS', '', inr(totalCashSales), inr(totalSales), inr(totalExpenses), '', totalDifference, ''],
-  });
-  const handleDownload = () => downloadReportCSV(records, columns, meta());
-  const handlePrint = () => printReport(records, columns, meta());
-
-  const handleDownloadOne = async (id: string) => {
-    try {
-      await shiftApi.downloadReport(id);
-    } catch (err) {
-      alert(describeError(err, 'Failed to download shift report'));
-    }
-  };
-
   return (
     <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Shift Closing Report</h1>
-          <p className="text-gray-600">View historical shift closing reports</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={handleDownload} disabled={!records.length} className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Download className="w-3 h-3" />Excel</button>
-          <button onClick={handlePrint} disabled={!records.length} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded text-sm flex items-center gap-1"><Printer className="w-3 h-3" />Print</button>
-        </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">Shift Closing Report</h1>
+        <p className="text-gray-600">View historical shift closing reports</p>
       </div>
 
       {error && (
@@ -208,7 +166,12 @@ export const ShiftClosingReport = () => {
               className="w-full"
             />
           </div>
-          <div className="flex items-end"></div>
+          <div className="flex items-end">
+            <button className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium">
+              <Download className="w-4 h-4" />
+              Export
+            </button>
+          </div>
         </div>
       </div>
 
@@ -254,7 +217,6 @@ export const ShiftClosingReport = () => {
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Closing</th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Diff</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Report</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -300,16 +262,6 @@ export const ShiftClosingReport = () => {
                       {record.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-center">
-                    <button
-                      onClick={() => handleDownloadOne(record.id)}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 border border-blue-200 rounded"
-                      title="Download shift closing report"
-                    >
-                      <FileDown className="w-3.5 h-3.5" />
-                      Download
-                    </button>
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -326,7 +278,6 @@ export const ShiftClosingReport = () => {
                     {totalDifference === 0 ? '0' : (totalDifference > 0 ? '+' : '') + totalDifference}
                   </span>
                 </td>
-                <td className="px-4 py-3"></td>
                 <td className="px-4 py-3"></td>
               </tr>
             </tfoot>

@@ -13,15 +13,6 @@ import {
 
 type Mode = 'list' | 'create';
 
-interface FormState {
-  customerId: string;
-  itemId: string;
-  validFrom: string;
-  validTo: string;
-  reason: string;
-}
-const empty: FormState = { customerId: '', itemId: '', validFrom: '', validTo: '', reason: '' };
-
 export const FreezeItemToCustomer = () => {
   const [mode, setMode] = useState<Mode>('list');
   const [items, setItems] = useState<CustomerFreezeRow[]>([]);
@@ -31,10 +22,18 @@ export const FreezeItemToCustomer = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [form, setForm] = useState<FormState>(empty);
+
+  // Create state.
+  const [customerId, setCustomerId] = useState('');
+  const [validFrom, setValidFrom] = useState('');
+  const [validTo, setValidTo] = useState('');
+  const [reason, setReason] = useState('');
+  const [freezeAll, setFreezeAll] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [rowSearch, setRowSearch] = useState('');
 
   useEffect(() => {
-    Promise.all([customersApi.list({ pageSize: 200 }), itemsApi.list({ pageSize: 200 })])
+    Promise.all([customersApi.list({ pageSize: 200 }), itemsApi.list({ pageSize: 500 })])
       .then(([c, i]) => { setCustomers(c.items); setItemsList(i.items); })
       .catch(() => undefined);
   }, []);
@@ -60,21 +59,56 @@ export const FreezeItemToCustomer = () => {
     );
   }, [items, search]);
 
-  const openCreate = () => { setForm(empty); setError(null); setMode('create'); };
+  const visibleItems = useMemo(() => {
+    const q = rowSearch.trim().toLowerCase();
+    if (!q) return itemsList;
+    return itemsList.filter((i) => i.name.toLowerCase().includes(q) || i.code.toLowerCase().includes(q));
+  }, [itemsList, rowSearch]);
+
+  const openCreate = () => {
+    setCustomerId(''); setValidFrom(''); setValidTo(''); setReason(''); setFreezeAll(false);
+    setSelected(new Set()); setRowSearch(''); setError(null); setMode('create');
+  };
+
+  const toggleItem = (itemId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId); else next.add(itemId);
+      return next;
+    });
+  };
+
+  const toggleAllVisible = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allSelected = visibleItems.every((i) => next.has(i.id));
+      for (const i of visibleItems) { if (allSelected) next.delete(i.id); else next.add(i.id); }
+      return next;
+    });
+  };
 
   const handleSave = async () => {
-    if (!form.customerId || !form.validFrom || !form.validTo) { setError('Customer, valid from and valid to are required.'); return; }
-    if (new Date(form.validFrom) > new Date(form.validTo)) { setError('Valid From must be on or before Valid To.'); return; }
+    if (!customerId || !validFrom || !validTo) { setError('Customer, valid from and valid to are required.'); return; }
+    if (new Date(validFrom) > new Date(validTo)) { setError('Valid From must be on or before Valid To.'); return; }
+    if (!freezeAll && selected.size === 0) { setError('Select at least one item, or choose "Freeze entire customer".'); return; }
     setSaving(true); setError(null);
+    const base = {
+      customerId,
+      validFrom: new Date(validFrom).toISOString(),
+      validTo: new Date(validTo).toISOString(),
+      reason: reason.trim() || undefined,
+    };
     try {
-      await customerFreezesApi.create({
-        customerId: form.customerId,
-        itemId: form.itemId || null,
-        validFrom: new Date(form.validFrom).toISOString(),
-        validTo: new Date(form.validTo).toISOString(),
-        reason: form.reason.trim() || undefined,
-      });
-      setMode('list');
+      if (freezeAll) {
+        await customerFreezesApi.create({ ...base, itemId: null });
+        setMode('list');
+      } else {
+        const itemIds = Array.from(selected);
+        const results = await Promise.allSettled(itemIds.map((itemId) => customerFreezesApi.create({ ...base, itemId })));
+        const failed = results.filter((r) => r.status === 'rejected').length;
+        if (failed > 0) { setError(`Saved ${itemIds.length - failed} of ${itemIds.length}. ${failed} failed.`); }
+        else { setMode('list'); }
+      }
     } catch (err) { setError(describeError(err, 'Save failed')); }
     finally { setSaving(false); }
   };
@@ -86,10 +120,6 @@ export const FreezeItemToCustomer = () => {
   };
 
   const customerOptions = customers.map((c) => ({ label: `${c.code} — ${c.name}`, value: c.id }));
-  const itemOptions = [
-    { label: 'All items (freeze entire customer)', value: '' },
-    ...itemsList.map((i) => ({ label: `${i.code} — ${i.name}`, value: i.id })),
-  ];
 
   if (mode === 'list') {
     return (
@@ -156,6 +186,9 @@ export const FreezeItemToCustomer = () => {
     );
   }
 
+  // Bulk create — freeze many items for one customer in a single screen.
+  const allVisibleSelected = visibleItems.length > 0 && visibleItems.every((i) => selected.has(i.id));
+
   return (
     <div className="p-6">
       <button onClick={() => setMode('list')} className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-4">
@@ -163,33 +196,73 @@ export const FreezeItemToCustomer = () => {
       </button>
       <div className="mb-6 text-center">
         <h1 className="text-2xl font-bold text-gray-900">Add Freeze</h1>
+        <p className="text-sm text-gray-500 mt-1">Pick a customer and date range, then select any number of items to freeze at once.</p>
       </div>
-      {error && <div className="max-w-2xl mx-auto mb-4 p-3 bg-red-50 border border-red-200 text-red-800 rounded text-sm">{error}</div>}
-      <div className="max-w-2xl mx-auto bg-white rounded-lg border border-gray-300 p-6">
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div className="col-span-2">
+      {error && <div className="max-w-4xl mx-auto mb-4 p-3 bg-red-50 border border-red-200 text-red-800 rounded text-sm">{error}</div>}
+      <div className="max-w-4xl mx-auto bg-white rounded-lg border border-gray-300 p-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div className="md:col-span-1">
             <label className="block text-sm font-medium text-gray-700 mb-1">Customer *</label>
-            <SearchableDropdown options={customerOptions} value={form.customerId} onValueChange={(v) => setForm({ ...form, customerId: v })} placeholder="Select customer" />
-          </div>
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Item</label>
-            <SearchableDropdown options={itemOptions} value={form.itemId} onValueChange={(v) => setForm({ ...form, itemId: v })} placeholder="All items" />
-            <p className="text-xs text-gray-500 mt-1">Leave as "All items" to block every item for this customer.</p>
+            <SearchableDropdown options={customerOptions} value={customerId} onValueChange={setCustomerId} placeholder="Select customer" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Valid From *</label>
-            <input type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+            <input type="date" value={validFrom} onChange={(e) => setValidFrom(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Valid To *</label>
-            <input type="date" value={form.validTo} onChange={(e) => setForm({ ...form, validTo: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
-            <textarea value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} maxLength={500} rows={3} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+            <input type="date" value={validTo} onChange={(e) => setValidTo(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
           </div>
         </div>
-        <div className="flex gap-4">
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} rows={2} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+        </div>
+
+        <label className="flex items-center gap-2 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <input type="checkbox" checked={freezeAll} onChange={(e) => setFreezeAll(e.target.checked)} />
+          <span className="text-sm text-amber-900 inline-flex items-center gap-1"><Snowflake className="w-4 h-4" /> Freeze entire customer (block every item)</span>
+        </label>
+
+        {!freezeAll && (
+          <>
+            <div className="flex items-center justify-between mb-3 gap-4">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input type="text" value={rowSearch} onChange={(e) => setRowSearch(e.target.value)} placeholder="Filter items…" className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <span className="text-sm text-gray-500">{selected.size} item{selected.size === 1 ? '' : 's'} selected</span>
+            </div>
+            <div className="border border-gray-200 rounded-lg overflow-hidden max-h-[28rem] overflow-y-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-300 sticky top-0">
+                  <tr>
+                    <th className="px-4 py-2 text-left w-12">
+                      <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} title="Select all" />
+                    </th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Item</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {visibleItems.map((it) => (
+                    <tr key={it.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleItem(it.id)}>
+                      <td className="px-4 py-2">
+                        <input type="checkbox" checked={selected.has(it.id)} onChange={() => toggleItem(it.id)} onClick={(e) => e.stopPropagation()} />
+                      </td>
+                      <td className="px-4 py-2 text-sm">
+                        <div className="font-medium text-gray-900">{it.name}</div>
+                        <div className="text-xs text-gray-500">{it.code}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {visibleItems.length === 0 && <div className="text-center py-8 text-gray-500">No items match.</div>}
+            </div>
+          </>
+        )}
+
+        <div className="flex gap-4 mt-6">
           <button onClick={handleSave} disabled={saving} className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center justify-center gap-2 font-medium">
             {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
             Save Freeze

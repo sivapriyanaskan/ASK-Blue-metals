@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { prisma } from '../../infra/db.js';
 import { Errors } from '../../infra/errors.js';
 import { checkPasswordPolicy, hashPassword } from './password.js';
-import { SUPER_ADMIN_ONLY_ROLES, actorIsSuperAdmin } from './permissions.js';
 import { auditService } from '../audit/audit.service.js';
 
 export const CreateUserSchema = z.object({
@@ -40,55 +39,14 @@ export type ListUsersQuery = z.infer<typeof ListUsersQuerySchema>;
 interface ActorContext {
   actorId: string;
   actorName: string;
-  actorRoles?: string[];
   ipAddress?: string | null;
   userAgent?: string | null;
   requestId?: string | null;
 }
 
-function assertSuperAdminAssignment(roleCodes: string[], actorRoles: string[] | undefined) {
-  // SUPER_ADMIN is never assignable through the API. The only Super Admin
-  // accounts are those provisioned via the seed.
-  if (roleCodes.includes('SUPER_ADMIN')) {
-    throw Errors.forbidden('SUPER_ADMIN cannot be assigned through the API');
-  }
-  const elevated = roleCodes.filter((c) => SUPER_ADMIN_ONLY_ROLES.includes(c));
-  if (elevated.length === 0) return;
-  if (!actorIsSuperAdmin(actorRoles)) {
-    throw Errors.forbidden(
-      `Only a Super Admin can assign the following role(s): ${elevated.join(', ')}`,
-    );
-  }
-}
-
-// Returns a Prisma `where` fragment for the user list.
-// SUPER_ADMIN accounts are NEVER listed (seed-only, hidden from everyone).
-// Non-super-admin actors additionally cannot see INVOICE_BILLING users.
-function elevatedUserScope(actorRoles: string[] | undefined) {
-  const hiddenForAll = ['SUPER_ADMIN'];
-  const hidden = actorIsSuperAdmin(actorRoles)
-    ? hiddenForAll
-    : Array.from(new Set([...hiddenForAll, ...SUPER_ADMIN_ONLY_ROLES]));
-  return {
-    roles: { none: { role: { code: { in: hidden } } } },
-  } as const;
-}
-
-function assertCanTouchTarget(
-  targetRoles: { role: { code: string } }[] | undefined,
-  actorRoles: string[] | undefined,
-) {
-  const codes = (targetRoles ?? []).map((r) => r.role.code);
-  const hasElevated = codes.some((c) => SUPER_ADMIN_ONLY_ROLES.includes(c));
-  if (hasElevated && !actorIsSuperAdmin(actorRoles)) {
-    throw Errors.forbidden('Only a Super Admin can manage this user');
-  }
-}
-
 export const userService = {
-  async list(q: ListUsersQuery, actorRoles?: string[]) {
+  async list(q: ListUsersQuery) {
     const where = {
-      ...elevatedUserScope(actorRoles),
       ...(q.status ? { status: q.status } : {}),
       ...(q.search
         ? {
@@ -122,21 +80,18 @@ export const userService = {
     };
   },
 
-  async getById(id: string, actorRoles?: string[]) {
+  async getById(id: string) {
     const user = await prisma.user.findUnique({
       where: { id },
       include: { roles: { include: { role: true } } },
     });
     if (!user) throw Errors.notFound('User');
-    assertCanTouchTarget(user.roles, actorRoles);
     return toPublic(user);
   },
 
   async create(input: CreateUserInput, ctx: ActorContext) {
     const policy = checkPasswordPolicy(input.password);
     if (!policy.valid) throw Errors.unprocessable('Password does not meet policy', policy.reasons);
-
-    assertSuperAdminAssignment(input.roleCodes, ctx.actorRoles);
 
     const roles = await prisma.role.findMany({ where: { code: { in: input.roleCodes } } });
     if (roles.length !== input.roleCodes.length) {
@@ -186,11 +141,9 @@ export const userService = {
       include: { roles: { include: { role: true } } },
     });
     if (!existing) throw Errors.notFound('User');
-    assertCanTouchTarget(existing.roles, ctx.actorRoles);
 
     let roleIds: string[] | undefined;
     if (input.roleCodes) {
-      assertSuperAdminAssignment(input.roleCodes, ctx.actorRoles);
       const roles = await prisma.role.findMany({ where: { code: { in: input.roleCodes } } });
       if (roles.length !== input.roleCodes.length) {
         throw Errors.unprocessable('Unknown roles');
@@ -234,12 +187,8 @@ export const userService = {
   },
 
   async deactivate(id: string, ctx: ActorContext) {
-    const existing = await prisma.user.findUnique({
-      where: { id },
-      include: { roles: { include: { role: true } } },
-    });
+    const existing = await prisma.user.findUnique({ where: { id } });
     if (!existing) throw Errors.notFound('User');
-    assertCanTouchTarget(existing.roles, ctx.actorRoles);
     if (existing.status === 'INACTIVE') return toPublic(existing as never);
 
     const updated = await prisma.user.update({

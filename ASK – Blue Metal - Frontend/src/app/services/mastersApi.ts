@@ -217,27 +217,20 @@ export interface CustomerVehicleInput {
 }
 export interface CustomerRow extends SimpleRow {
   address?: string | null;
-  state?: string | null;
-  billType: 'TAX_INVOICE' | 'NON_GST' | 'WEIGHT_SLIP';
+  billType: 'TAX_INVOICE' | 'NON_GST';
   gstNumber?: string | null;
   tcsApplicable: boolean;
   creditLimit: string;
-  remainingBalance?: string;
   termsOfDelivery?: string | null;
   contactPerson?: string | null;
   phone?: string | null;
   email?: string | null;
-  eWayBillNo?: string | null;
-  anprNumber?: string | null;
-  paymentTerms?: string | null;
-  paymentDueDays?: number | null;
   vehicles?: CustomerVehicleRow[];
 }
 export interface CustomerInput {
-  code?: string;
+  code: string;
   name: string;
   address?: string | null;
-  state?: string | null;
   billType: 'TAX_INVOICE' | 'NON_GST';
   gstNumber?: string | null;
   tcsApplicable?: boolean;
@@ -246,10 +239,6 @@ export interface CustomerInput {
   contactPerson?: string | null;
   phone?: string | null;
   email?: string | null;
-  eWayBillNo?: string | null;
-  anprNumber?: string | null;
-  paymentTerms?: string | null;
-  paymentDueDays?: number | null;
   vehicles?: CustomerVehicleInput[];
   isActive?: boolean;
 }
@@ -268,7 +257,6 @@ export interface SupplierVehicleInput {
 }
 export interface SupplierRow extends SimpleRow {
   address?: string | null;
-  state?: string | null;
   controlAccountId?: string | null;
   supplierType: 'TON_BASED' | 'REPAIR_MAINTENANCE';
   gstNumber?: string | null;
@@ -278,10 +266,9 @@ export interface SupplierRow extends SimpleRow {
   vehicles?: SupplierVehicleRow[];
 }
 export interface SupplierInput {
-  code?: string;
+  code: string;
   name: string;
   address?: string | null;
-  state?: string | null;
   controlAccountId?: string | null;
   supplierType: 'TON_BASED' | 'REPAIR_MAINTENANCE';
   gstNumber?: string;
@@ -353,25 +340,7 @@ export const vehiclesApi = {
   },
 };
 export const customersApi = simpleResource<CustomerRow, CustomerInput>('customers');
-
-export interface GstLookupResult {
-  gstin: string;
-  legalName: string;
-  tradeName: string;
-  address: string;
-  stateCode: string;
-  state?: string;
-  city?: string;
-  area?: string;
-  status: string;
-  source: string;
-}
-export const customerGstLookup = async (gstin: string): Promise<GstLookupResult> =>
-  (await api.get(`/masters/customers/gst-lookup/${encodeURIComponent(gstin)}`)).data;
-
 export const suppliersApi = simpleResource<SupplierRow, SupplierInput>('suppliers');
-export const supplierGstLookup = async (gstin: string): Promise<GstLookupResult> =>
-  (await api.get(`/masters/suppliers/gst-lookup/${encodeURIComponent(gstin)}`)).data;
 export const itemsApi = simpleResource<ItemRow, ItemInput>('items');
 
 /* ------------------------------------------------------------------ */

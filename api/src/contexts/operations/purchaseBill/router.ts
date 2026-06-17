@@ -2,22 +2,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../infra/db.js';
-import { Errors } from '../../../infra/errors.js';
 import { asyncHandler, validate } from '../../../infra/validation.js';
 import { requireAuth } from '../../iam/auth.middleware.js';
 import { auditService } from '../../audit/audit.service.js';
 import { actorContextFromRequest } from '../../masters/_common.js';
-
-const DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT = 750000;
-
-async function getHighValueConfirmationLimit() {
-  const raw = await prisma.systemSetting.findUnique({
-    where: { key: 'billing.highValueConfirmationLimit' },
-    select: { value: true },
-  });
-  const parsed = Number(raw?.value ?? DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_HIGH_VALUE_CONFIRMATION_LIMIT;
-}
 
 const ListQuery = z.object({
   search: z.string().trim().min(1).optional(),
@@ -35,17 +23,13 @@ const Create = z.object({
   vehicleNoSnapshot: z.string().trim().min(1).max(32).transform(s => s.toUpperCase()),
   driverNameSnapshot: z.string().trim().max(120).optional().nullable(),
   supplierId: z.string().min(1),
-  workCentreId: z.string().min(1).optional().nullable(),
+  workCentreId: z.string().min(1),
   itemId: z.string().min(1),
   loadWeight: z.coerce.number().nonnegative(),
   emptyWeight: z.coerce.number().nonnegative(),
   rate: z.coerce.number().nonnegative(),
   gstPercent: z.coerce.number().nonnegative().default(0),
-  driverBata: z.coerce.number().nonnegative().default(0),
   paymentMode: z.enum(['CASH', 'ONLINE', 'CREDIT', 'MIXED']).default('CREDIT'),
-  confirmationReason: z.string().trim().max(500).optional().nullable(),
-  anprImageRef: z.string().trim().max(500).optional().nullable(),
-  loadImageRef: z.string().trim().max(500).optional().nullable(),
 });
 
 const Cancel = z.object({ cancelledReason: z.string().trim().min(3).max(500) });
@@ -89,39 +73,17 @@ router.get('/', validate('query', ListQuery), asyncHandler(async (req, res) => {
     }),
     prisma.purchaseBill.count({ where }),
   ]);
-  const creatorIds = Array.from(new Set(items.map(b => b.createdById).filter(Boolean)));
-  const creators = creatorIds.length
-    ? await prisma.user.findMany({
-        where: { id: { in: creatorIds } },
-        select: { id: true, firstName: true, lastName: true, username: true },
-      })
-    : [];
-  const creatorMap: Record<string, string> = {};
-  for (const u of creators) {
-    const name = [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.username;
-    creatorMap[u.id] = name;
-  }
-  const enriched = items.map(b => ({ ...b, createdByName: creatorMap[b.createdById] ?? null }));
-  res.json({ items: enriched, page: q.page, pageSize: q.pageSize, total });
+  res.json({ items, page: q.page, pageSize: q.pageSize, total });
 }));
 
 router.get('/:id', validate('params', IdParam), asyncHandler(async (req, res) => {
   const bill = await prisma.purchaseBill.findUnique({
     where: { id: req.params.id },
     include: {
-      supplier: { select: { id: true, code: true, name: true, address: true, gstNumber: true, phone: true } },
+      supplier: { select: { id: true, code: true, name: true } },
       workCentre: { select: { id: true, code: true, name: true } },
       item: { select: { id: true, code: true, name: true } },
-      entryPass: {
-        select: {
-          id: true,
-          passNo: true,
-          status: true,
-          anprImageRef: true,
-          anprNumberPlateText: true,
-          loadImageRef: true,
-        },
-      },
+      entryPass: { select: { id: true, passNo: true, status: true } },
     },
   });
   if (!bill) return res.status(404).json({ message: 'Not found' });
@@ -134,10 +96,8 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
 
   const supplier = await prisma.supplier.findUnique({ where: { id: data.supplierId } });
   if (!supplier) return res.status(422).json({ message: 'Supplier not found' });
-  if (data.workCentreId) {
-    const workCentre = await prisma.workCentre.findUnique({ where: { id: data.workCentreId } });
-    if (!workCentre) return res.status(422).json({ message: 'Work centre not found' });
-  }
+  const workCentre = await prisma.workCentre.findUnique({ where: { id: data.workCentreId } });
+  if (!workCentre) return res.status(422).json({ message: 'Work centre not found' });
   const item = await prisma.item.findUnique({ where: { id: data.itemId } });
   if (!item) return res.status(422).json({ message: 'Item not found' });
 
@@ -145,10 +105,6 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
   const grossAmount = netWeight * data.rate;
   const gstAmount = (grossAmount * data.gstPercent) / 100;
   const grossPayable = grossAmount + gstAmount;
-  const highValueConfirmationLimit = await getHighValueConfirmationLimit();
-  if (grossPayable > highValueConfirmationLimit && !data.confirmationReason?.trim()) {
-    throw Errors.badRequest('Confirmation reason is required when payment amount exceeds the configured limit');
-  }
 
   const fy = new Date().getFullYear() % 100;
   const scope = `pb:${fy}`;
@@ -190,7 +146,7 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
           driverNameSnapshot: data.driverNameSnapshot ?? null,
           supplierId: data.supplierId,
           supplierNameSnapshot: supplier.name,
-          workCentreId: data.workCentreId ?? null,
+          workCentreId: data.workCentreId,
           itemId: data.itemId,
           itemNameSnapshot: item.name,
           loadWeight: data.loadWeight,
@@ -201,11 +157,7 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
           gstPercent: data.gstPercent,
           gstAmount,
           grossPayable,
-          driverBata: data.driverBata,
-          confirmationReason: data.confirmationReason ?? null,
           paymentMode: data.paymentMode,
-          anprImageRef: data.anprImageRef ?? null,
-          loadImageRef: data.loadImageRef ?? null,
           status: 'POSTED',
           createdById: actor.actorId ?? 'system',
         },
@@ -217,24 +169,6 @@ router.post('/', validate('body', Create), asyncHandler(async (req, res) => {
           data: { status: 'BILLED' },
         });
       }
-      // Auto-create a NEW PurchaseConsumption row tied to the current open shift.
-      // Used by the Raw Material — Purchase Wise screen and shift close
-      // validation. If no shift is open the row is still created (no shift
-      // attribution) so the bill never goes untracked.
-      const openShift = await prisma.shift.findFirst({
-        where: { status: 'OPEN' },
-        orderBy: { openedAt: 'desc' },
-        select: { id: true },
-      });
-      await prisma.purchaseConsumption.create({
-        data: {
-          purchaseBillId: bill.id,
-          itemId: bill.itemId,
-          quantity: bill.netWeight,
-          status: 'NEW',
-          createdByShiftId: openShift?.id ?? null,
-        },
-      });
       break;
     } catch (err: any) {
       if (err?.code === 'P2002' && attempts < 5) {

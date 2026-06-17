@@ -191,7 +191,4 @@ export const roleAccessApi = {
     (await api.get(`/admin/role-access/${roleId}/menus`)).data,
   putMenus: async (roleId: string, entries: RoleMenuEntry[]): Promise<{ ok: true; count: number }> =>
     (await api.put(`/admin/role-access/${roleId}/menus`, { entries })).data,
-  /** Returns the current user's effective menu access (union across all their roles). */
-  myMenus: async (): Promise<{ items: RoleMenuItem[] }> =>
-    (await api.get(`/admin/role-access/my/menus`)).data,
 };

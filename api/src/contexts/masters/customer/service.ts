@@ -16,7 +16,6 @@ const TRACKED_FIELDS = [
   'code',
   'name',
   'address',
-  'state',
   'billType',
   'gstNumber',
   'tcsApplicable',
@@ -25,76 +24,8 @@ const TRACKED_FIELDS = [
   'contactPerson',
   'phone',
   'email',
-  'eWayBillNo',
-  'anprNumber',
-  'paymentTerms',
-  'paymentDueDays',
   'isActive',
 ] as const;
-
-const GST_STATE_NAME: Record<string, string> = {
-  '01': 'Jammu and Kashmir',
-  '02': 'Himachal Pradesh',
-  '03': 'Punjab',
-  '04': 'Chandigarh',
-  '05': 'Uttarakhand',
-  '06': 'Haryana',
-  '07': 'Delhi',
-  '08': 'Rajasthan',
-  '09': 'Uttar Pradesh',
-  '10': 'Bihar',
-  '11': 'Sikkim',
-  '12': 'Arunachal Pradesh',
-  '13': 'Nagaland',
-  '14': 'Manipur',
-  '15': 'Mizoram',
-  '16': 'Tripura',
-  '17': 'Meghalaya',
-  '18': 'Assam',
-  '19': 'West Bengal',
-  '20': 'Jharkhand',
-  '21': 'Odisha',
-  '22': 'Chhattisgarh',
-  '23': 'Madhya Pradesh',
-  '24': 'Gujarat',
-  '25': 'Daman and Diu',
-  '26': 'Dadra and Nagar Haveli and Daman and Diu',
-  '27': 'Maharashtra',
-  '28': 'Andhra Pradesh',
-  '29': 'Karnataka',
-  '30': 'Goa',
-  '31': 'Lakshadweep',
-  '32': 'Kerala',
-  '33': 'Tamil Nadu',
-  '34': 'Puducherry',
-  '35': 'Andaman and Nicobar Islands',
-  '36': 'Telangana',
-  '37': 'Andhra Pradesh (New)',
-  '38': 'Ladakh',
-};
-
-function inferStateFromGstin(gstin?: string | null): string | null {
-  const stateCode = (gstin ?? '').trim().slice(0, 2);
-  return GST_STATE_NAME[stateCode] ?? null;
-}
-
-// Generate the next sequential customer code (CUST0001, CUST0002, ...).
-// Uses a SERIALIZABLE-style read of the highest existing code to avoid
-// cross-request collisions; the unique index on Customer.code provides
-// a final guard if two writers race.
-async function nextCustomerCode(tx: Prisma.TransactionClient): Promise<string> {
-  const last = await tx.customer.findFirst({
-    where: { code: { startsWith: 'CUST' } },
-    orderBy: { code: 'desc' },
-    select: { code: true },
-  });
-  let next = 1;
-  if (last?.code) {
-    const m = /^CUST(\d+)$/.exec(last.code);
-    if (m) next = parseInt(m[1], 10) + 1;
-  }
-  return `CUST${String(next).padStart(4, '0')}`;
-}
 
 export const customerService = {
   async list(q: ListCustomersQuery) {
@@ -137,13 +68,12 @@ export const customerService = {
   },
 
   async create(input: CreateCustomerInput, ctx: ActorContext) {
-    const createCustomer = async (code: string) =>
-      prisma.customer.create({
+    const created = await prisma.$transaction(async (tx) => {
+      const c = await tx.customer.create({
         data: {
-          code,
+          code: input.code,
           name: input.name,
           address: input.address ?? null,
-          state: input.state ?? inferStateFromGstin(input.gstNumber),
           billType: input.billType,
           gstNumber: input.gstNumber ?? null,
           tcsApplicable: input.tcsApplicable,
@@ -152,10 +82,6 @@ export const customerService = {
           contactPerson: input.contactPerson ?? null,
           phone: input.phone ?? null,
           email: input.email ?? null,
-          eWayBillNo: input.eWayBillNo ?? null,
-          anprNumber: input.anprNumber ?? null,
-          paymentTerms: input.paymentTerms ?? null,
-          paymentDueDays: input.paymentDueDays ?? 0,
           isActive: input.isActive ?? true,
           vehicles: input.vehicles?.length
             ? {
@@ -171,33 +97,8 @@ export const customerService = {
         },
         include: { vehicles: { orderBy: { vehicleNumber: 'asc' } } },
       });
-
-    let created;
-    if (input.code) {
-      created = await createCustomer(input.code);
-    } else {
-      // Retry generated codes to handle rare create races on unique customer code.
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const code = await nextCustomerCode(prisma as unknown as Prisma.TransactionClient);
-        try {
-          created = await createCustomer(code);
-          break;
-        } catch (error) {
-          if (
-            error instanceof Prisma.PrismaClientKnownRequestError
-            && error.code === 'P2002'
-            && attempt < 4
-          ) {
-            continue;
-          }
-          throw error;
-        }
-      }
-    }
-
-    if (!created) {
-      throw Errors.internal('Failed to create customer');
-    }
+      return c;
+    });
 
     await auditService.record({
       ...ctx,
@@ -221,53 +122,21 @@ export const customerService = {
       throw Errors.badRequest('GST Number is required when Bill Type is TAX_INVOICE');
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const inferredStateFromGst =
-        input.gstNumber !== undefined && input.state === undefined
-          ? inferStateFromGstin(input.gstNumber)
-          : undefined;
-
-      if (input.vehicles !== undefined) {
-        await tx.customerVehicle.deleteMany({ where: { customerId: id } });
-      }
-
-      return tx.customer.update({
-        where: { id },
-        data: {
-          ...(input.name !== undefined ? { name: input.name } : {}),
-          ...(input.address !== undefined ? { address: input.address } : {}),
-          ...(input.state !== undefined ? { state: input.state } : {}),
-          ...(inferredStateFromGst !== undefined ? { state: inferredStateFromGst } : {}),
-          ...(input.billType !== undefined ? { billType: input.billType } : {}),
-          ...(input.gstNumber !== undefined ? { gstNumber: input.gstNumber } : {}),
-          ...(input.tcsApplicable !== undefined ? { tcsApplicable: input.tcsApplicable } : {}),
-          ...(input.creditLimit !== undefined ? { creditLimit: input.creditLimit } : {}),
-          ...(input.termsOfDelivery !== undefined ? { termsOfDelivery: input.termsOfDelivery } : {}),
-          ...(input.contactPerson !== undefined ? { contactPerson: input.contactPerson } : {}),
-          ...(input.phone !== undefined ? { phone: input.phone } : {}),
-          ...(input.email !== undefined ? { email: input.email } : {}),
-          ...(input.eWayBillNo !== undefined ? { eWayBillNo: input.eWayBillNo } : {}),
-          ...(input.anprNumber !== undefined ? { anprNumber: input.anprNumber } : {}),
-          ...(input.paymentTerms !== undefined ? { paymentTerms: input.paymentTerms } : {}),
-          ...(input.paymentDueDays !== undefined ? { paymentDueDays: input.paymentDueDays ?? 0 } : {}),
-          ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-          ...(input.vehicles !== undefined
-            ? input.vehicles.length
-              ? {
-                vehicles: {
-                  createMany: {
-                    data: input.vehicles.map((v) => ({
-                      vehicleNumber: v.vehicleNumber,
-                      driverName: v.driverName ?? null,
-                      driverPhone: v.driverPhone ?? null,
-                    })),
-                  },
-                },
-              }
-              : {}
-            : {}),
-        },
-      });
+    const updated = await prisma.customer.update({
+      where: { id },
+      data: {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.address !== undefined ? { address: input.address } : {}),
+        ...(input.billType !== undefined ? { billType: input.billType } : {}),
+        ...(input.gstNumber !== undefined ? { gstNumber: input.gstNumber } : {}),
+        ...(input.tcsApplicable !== undefined ? { tcsApplicable: input.tcsApplicable } : {}),
+        ...(input.creditLimit !== undefined ? { creditLimit: input.creditLimit } : {}),
+        ...(input.termsOfDelivery !== undefined ? { termsOfDelivery: input.termsOfDelivery } : {}),
+        ...(input.contactPerson !== undefined ? { contactPerson: input.contactPerson } : {}),
+        ...(input.phone !== undefined ? { phone: input.phone } : {}),
+        ...(input.email !== undefined ? { email: input.email } : {}),
+        ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+      },
     });
 
     const changes = diff(

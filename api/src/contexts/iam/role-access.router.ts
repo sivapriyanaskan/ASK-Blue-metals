@@ -14,85 +14,6 @@ router.use(requireAuth);
 const RoleIdParam = z.object({ roleId: z.string().min(1) });
 
 /* ------------------------------------------------------------------ */
-/* Current user's effective menu access (must precede '/:roleId/...')  */
-/* ------------------------------------------------------------------ */
-router.get(
-  '/my/menus',
-  asyncHandler(async (req, res) => {
-    if (!req.user) throw Errors.unauthorized();
-    const roleCodes = req.user.roles ?? [];
-
-    // ADMIN / SUPER_ADMIN bypass: always grant every active menu.
-    const isAdmin = roleCodes.some((c) => c === 'ADMIN' || c === 'SUPER_ADMIN');
-    if (isAdmin) {
-      const allMenus = await prisma.menu.findMany({
-        where: { isActive: true },
-        orderBy: { sortOrder: 'asc' },
-      });
-      res.json({
-        items: allMenus.map((m) => ({
-          menuId: m.id,
-          code: m.code,
-          name: m.name,
-          parentId: m.parentId,
-          sortOrder: m.sortOrder,
-          canView: true,
-          canCreate: true,
-          canEdit: true,
-          canDelete: true,
-        })),
-      });
-      return;
-    }
-
-    if (roleCodes.length === 0) {
-      res.json({ items: [] });
-      return;
-    }
-    const roles = await prisma.role.findMany({
-      where: { code: { in: roleCodes } },
-      select: { id: true },
-    });
-    const roleIds = roles.map((r) => r.id);
-    if (roleIds.length === 0) {
-      res.json({ items: [] });
-      return;
-    }
-    const [menus, access] = await Promise.all([
-      prisma.menu.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' } }),
-      prisma.roleMenu.findMany({ where: { roleId: { in: roleIds } } }),
-    ]);
-    // Union across roles: a menu is allowed if ANY role grants the permission.
-    const grant = new Map<string, { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean }>();
-    for (const a of access) {
-      const cur = grant.get(a.menuId) ?? { canView: false, canCreate: false, canEdit: false, canDelete: false };
-      grant.set(a.menuId, {
-        canView: cur.canView || a.canView,
-        canCreate: cur.canCreate || a.canCreate,
-        canEdit: cur.canEdit || a.canEdit,
-        canDelete: cur.canDelete || a.canDelete,
-      });
-    }
-    res.json({
-      items: menus.map((m) => {
-        const g = grant.get(m.id);
-        return {
-          menuId: m.id,
-          code: m.code,
-          name: m.name,
-          parentId: m.parentId,
-          sortOrder: m.sortOrder,
-          canView: g?.canView ?? false,
-          canCreate: g?.canCreate ?? false,
-          canEdit: g?.canEdit ?? false,
-          canDelete: g?.canDelete ?? false,
-        };
-      }),
-    });
-  }),
-);
-
-/* ------------------------------------------------------------------ */
 /* Role -> Menu access                                                */
 /* ------------------------------------------------------------------ */
 
@@ -281,10 +202,5 @@ router.put(
     res.json({ ok: true, count: entries.length });
   }),
 );
-
-/* ------------------------------------------------------------------ */
-/* Current user's effective menu access (no special permission)        */
-/* ------------------------------------------------------------------ */
-// (route registered near the top of this file, before '/:roleId/...')
 
 export const roleAccessRouter = router;

@@ -45,8 +45,8 @@ const Schema = z.object({
   // server-side; the browser only ever sees the proxied MJPEG feed.
   CAMERA_FRONT_RTSP_URL: z.string().url().optional(),
   CAMERA_TOP_RTSP_URL: z.string().url().optional(),
-  CAMERA_STREAM_FPS: z.coerce.number().int().min(1).max(30).default(15),
-  CAMERA_STREAM_WIDTH: z.coerce.number().int().min(160).max(1920).default(1280),
+  CAMERA_STREAM_FPS: z.coerce.number().int().min(1).max(30).default(10),
+  CAMERA_STREAM_WIDTH: z.coerce.number().int().min(160).max(1920).default(640),
 });
 
 const parsed = Schema.safeParse(process.env);

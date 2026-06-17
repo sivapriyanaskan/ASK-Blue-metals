@@ -76,76 +76,33 @@ async function main() {
     });
   }
 
-  // 2d. Default role-menu / role-feature access for ADMIN + SUPER_ADMIN (full grant)
+  // 2d. Default role-menu / role-feature access for ADMIN (full grant)
   const adminRoleSeed = await prisma.role.findUnique({ where: { code: 'ADMIN' } });
-  const superAdminRoleSeed = await prisma.role.findUnique({ where: { code: 'SUPER_ADMIN' } });
-  const adminLikeRoles = [adminRoleSeed, superAdminRoleSeed].filter(
-    (r): r is NonNullable<typeof r> => r !== null,
-  );
-  for (const adminLike of adminLikeRoles) {
+  if (adminRoleSeed) {
     const allMenus = await prisma.menu.findMany();
     for (const m of allMenus) {
       await prisma.roleMenu.upsert({
-        where: { roleId_menuId: { roleId: adminLike.id, menuId: m.id } },
+        where: { roleId_menuId: { roleId: adminRoleSeed.id, menuId: m.id } },
         update: { canView: true, canCreate: true, canEdit: true, canDelete: true },
-        create: { roleId: adminLike.id, menuId: m.id, canView: true, canCreate: true, canEdit: true, canDelete: true },
+        create: { roleId: adminRoleSeed.id, menuId: m.id, canView: true, canCreate: true, canEdit: true, canDelete: true },
       });
     }
     const allFeatures = await prisma.feature.findMany();
     for (const f of allFeatures) {
       await prisma.roleFeature.upsert({
-        where: { roleId_featureId: { roleId: adminLike.id, featureId: f.id } },
+        where: { roleId_featureId: { roleId: adminRoleSeed.id, featureId: f.id } },
         update: { isAllowed: true },
-        create: { roleId: adminLike.id, featureId: f.id, isAllowed: true },
+        create: { roleId: adminRoleSeed.id, featureId: f.id, isAllowed: true },
       });
     }
   }
 
-  // 2e. INVOICE_BILLING role: grant only the menus needed for GST sales billing.
-  //     (Created by Super-Admin; restricted to tax-invoice flows.)
-  const invoiceRoleSeed = await prisma.role.findUnique({ where: { code: 'INVOICE_BILLING' } });
-  if (invoiceRoleSeed) {
-    const INVOICE_MENU_CODES = [
-      'DASHBOARD',
-      'MASTERS',
-      'CUSTOMER_MASTER',
-      'ITEM_MASTER',
-      'VEHICLE_MASTER',
-      'DRIVER_LABOUR_MASTER',
-      'OPERATIONS',
-      'TOKEN_CREATE',
-      'SALES_BILL',
-      'REPORTS',
-      'SALES_REGISTER',
-      'SALES_WITH_GST_FULL_QTY',
-      'SALES_GST_COMBINED',
-      'SALES_CUSTOMER_WISE',
-      'CUSTOMER_LEDGER',
-    ];
-    const invoiceMenus = await prisma.menu.findMany({
-      where: { code: { in: INVOICE_MENU_CODES } },
-    });
-    for (const m of invoiceMenus) {
-      await prisma.roleMenu.upsert({
-        where: { roleId_menuId: { roleId: invoiceRoleSeed.id, menuId: m.id } },
-        update: { canView: true, canCreate: true, canEdit: true, canDelete: false },
-        create: { roleId: invoiceRoleSeed.id, menuId: m.id, canView: true, canCreate: true, canEdit: true, canDelete: false },
-      });
-    }
-  }
-
-  // 3. Default Admin user (also granted SUPER_ADMIN so a bootstrap super-admin exists)
+  // 3. Default Admin user
   const adminRole = await prisma.role.findUniqueOrThrow({ where: { code: 'ADMIN' } });
-  const superAdminRole = await prisma.role.findUnique({ where: { code: 'SUPER_ADMIN' } });
-  const existing = await prisma.user.findUnique({
-    where: { username: config.SEED_ADMIN_USERNAME },
-    include: { roles: true },
-  });
+  const existing = await prisma.user.findUnique({ where: { username: config.SEED_ADMIN_USERNAME } });
 
   if (!existing) {
     const passwordHash = await hashPassword(config.SEED_ADMIN_PASSWORD);
-    const rolesToCreate = [{ roleId: adminRole.id }];
-    if (superAdminRole) rolesToCreate.push({ roleId: superAdminRole.id });
     await prisma.user.create({
       data: {
         username: config.SEED_ADMIN_USERNAME,
@@ -154,85 +111,15 @@ async function main() {
         lastName: 'Administrator',
         passwordHash,
         status: 'ACTIVE',
-        roles: { create: rolesToCreate },
+        roles: { create: { roleId: adminRole.id } },
       },
     });
     // eslint-disable-next-line no-console
     console.log(`Seeded admin user "${config.SEED_ADMIN_USERNAME}".`);
   } else {
-    // Ensure the existing admin user has SUPER_ADMIN granted (idempotent backfill).
-    if (superAdminRole && !existing.roles.some((r) => r.roleId === superAdminRole.id)) {
-      await prisma.userRole.create({
-        data: { userId: existing.id, roleId: superAdminRole.id },
-      });
-      // eslint-disable-next-line no-console
-      console.log(`Granted SUPER_ADMIN to existing admin user "${config.SEED_ADMIN_USERNAME}".`);
-    } else {
-      // eslint-disable-next-line no-console
-      console.log(`Admin user "${config.SEED_ADMIN_USERNAME}" already exists; skipping.`);
-    }
+    // eslint-disable-next-line no-console
+    console.log(`Admin user "${config.SEED_ADMIN_USERNAME}" already exists; skipping.`);
   }
-
-  // 3b. Dedicated Super Admin user (separate credentials from the regular Admin).
-  if (superAdminRole) {
-    const SUPER_USERNAME = 'superadmin';
-    const SUPER_PASSWORD = 'SuperAdmin@12345678';
-    const SUPER_EMAIL = 'superadmin@askbluemetal.local';
-    const existingSuper = await prisma.user.findUnique({ where: { username: SUPER_USERNAME } });
-    if (!existingSuper) {
-      const passwordHash = await hashPassword(SUPER_PASSWORD);
-      await prisma.user.create({
-        data: {
-          username: SUPER_USERNAME,
-          email: SUPER_EMAIL,
-          firstName: 'Super',
-          lastName: 'Admin',
-          passwordHash,
-          status: 'ACTIVE',
-          roles: { create: { roleId: superAdminRole.id } },
-        },
-      });
-      // eslint-disable-next-line no-console
-      console.log(
-        `Seeded Super Admin user "${SUPER_USERNAME}" (password: ${SUPER_PASSWORD}). CHANGE THIS AFTER FIRST LOGIN.`,
-      );
-    } else {
-      // eslint-disable-next-line no-console
-      console.log(`Super Admin user "${SUPER_USERNAME}" already exists; skipping.`);
-    }
-  }
-
-  // 5. Company profile (singleton row used to print invoice headers).
-  await prisma.companyProfile.upsert({
-    where: { id: 'singleton' },
-    update: {},
-    create: {
-      id: 'singleton',
-      name: 'ASK Blue Metal',
-      address: '',
-      gstin: '',
-      panNumber: '',
-      msmeNumber: '',
-      cin: '',
-      phone: '',
-      email: '',
-      bankName: '',
-      accountNumber: '',
-      ifscCode: '',
-      upiId: '',
-    },
-  });
-
-  await prisma.systemSetting.upsert({
-    where: { key: 'tokens.externalEntryRequired' },
-    update: {},
-    create: {
-      key: 'tokens.externalEntryRequired',
-      category: 'operations.token',
-      value: false,
-      updatedBy: 'seed',
-    },
-  });
 }
 
 main()
